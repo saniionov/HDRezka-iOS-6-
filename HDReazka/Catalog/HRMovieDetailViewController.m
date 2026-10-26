@@ -438,6 +438,8 @@ typedef NS_ENUM(NSInteger, HRActionSheetTag) {
 @property (nonatomic, strong) NSDictionary *currentStreams;
 @property (nonatomic, copy) NSString *currentSubtitles;
 @property (nonatomic, assign) BOOL isSeriesMovie;
+@property (nonatomic, assign) NSUInteger streamRequestGeneration;
+@property (nonatomic, assign) NSUInteger detailRequestGeneration;
 
 // Объявления методов, чтобы компилятор не выдавал ошибки видимости
 - (void)playCurrentVideoInPlayer;
@@ -449,6 +451,8 @@ typedef NS_ENUM(NSInteger, HRActionSheetTag) {
 - (void)shareEntireSeasonM3U;
 - (void)shareM3UContent:(NSString *)content suggestedName:(NSString *)name;
 - (void)showExportMenu;
+- (void)normalizeSeasonAndEpisodeSelection;
+- (void)requestVideoStreams;
 
 @end
 
@@ -492,6 +496,18 @@ typedef NS_ENUM(NSInteger, HRActionSheetTag) {
                                                                               target:self
                                                                               action:@selector(backButtonTapped:)];
     
+    UIButton *refreshButton = [UIButton buttonWithType:UIButtonTypeCustom];
+    refreshButton.frame = CGRectMake(0.0f, 0.0f, 34.0f, 30.0f);
+    refreshButton.backgroundColor = [UIColor colorWithRed:0.10f green:0.10f blue:0.10f alpha:1.0f];
+    refreshButton.layer.cornerRadius = 5.0f;
+    refreshButton.layer.borderWidth = 1.0f;
+    refreshButton.layer.borderColor = [UIColor colorWithRed:0.72f green:0.08f blue:0.12f alpha:1.0f].CGColor;
+    refreshButton.titleLabel.font = [UIFont boldSystemFontOfSize:23.0f];
+    [refreshButton setTitle:@"↻" forState:UIControlStateNormal];
+    [refreshButton setTitleColor:[UIColor colorWithRed:0.95f green:0.18f blue:0.22f alpha:1.0f] forState:UIControlStateNormal];
+    [refreshButton addTarget:self action:@selector(refreshCardTapped:) forControlEvents:UIControlEventTouchUpInside];
+    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:refreshButton];
+    
     [self setupHeaderAndTableView];
     
     self.spinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleWhiteLarge];
@@ -507,6 +523,39 @@ typedef NS_ENUM(NSInteger, HRActionSheetTag) {
 - (void)backButtonTapped:(id)sender
 {
     [self.navigationController popViewControllerAnimated:YES];
+}
+
+- (void)refreshCardTapped:(id)sender
+{
+    /* Инвалидируем ожидающий запрос потоков и повторно загружаем данные карточки. */
+    self.streamRequestGeneration++;
+    self.currentStreams = nil;
+    self.currentSubtitles = nil;
+    [self.tableView reloadData];
+    [self loadMoviePageDetails];
+}
+
+- (NSString *)movieInfoForDisplay
+{
+    NSString *info = self.movie.info;
+    if (![info isKindOfClass:[NSString class]] || [info length] == 0) {
+        return @"HDRezka";
+    }
+    
+    /* В старой схеме истории к info мог добавляться служебный маркер [S:x E:y].
+     Он нужен для восстановления позиции, но не должен отображаться в карточке. */
+    NSRange markerRange = [info rangeOfString:@"[S:"];
+    if (markerRange.location != NSNotFound) {
+        NSRange endRange = [info rangeOfString:@"]" options:0
+                                         range:NSMakeRange(markerRange.location, [info length] - markerRange.location)];
+        if (endRange.location != NSNotFound) {
+            info = [info stringByReplacingCharactersInRange:NSMakeRange(markerRange.location, endRange.location - markerRange.location + 1)
+                                                 withString:@""];
+        }
+    }
+    
+    info = [info stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    return ([info length] > 0) ? info : @"HDRezka";
 }
 
 - (void)saveCurrentHistory
@@ -575,7 +624,7 @@ typedef NS_ENUM(NSInteger, HRActionSheetTag) {
     self.metaLabel.textColor = [UIColor colorWithRed:0.85 green:0.25 blue:0.25 alpha:1.0];
     self.metaLabel.backgroundColor = [UIColor clearColor];
     self.metaLabel.numberOfLines = 2;
-    self.metaLabel.text = self.movie.info ?: @"HDRezka";
+    self.metaLabel.text = [self movieInfoForDisplay];
     [headerView addSubview:self.metaLabel];
     
     CGFloat descTop = pad + (isPad ? 106.0f : 82.0f);
@@ -625,6 +674,8 @@ typedef NS_ENUM(NSInteger, HRActionSheetTag) {
 - (void)loadMoviePageDetails
 {
     [self.spinner startAnimating];
+    self.detailRequestGeneration++;
+    NSUInteger detailGeneration = self.detailRequestGeneration;
     
     [HRStreamResolver fetchMoviePageDetails:self.movie
                                  completion:^(NSString *descriptionText,
@@ -634,6 +685,7 @@ typedef NS_ENUM(NSInteger, HRActionSheetTag) {
                                               NSInteger defaultTranslatorId,
                                               NSDictionary *initialStreams,
                                               NSError *error) {
+                                     if (detailGeneration != self.detailRequestGeneration) return;
                                      [self.spinner stopAnimating];
                                      
                                      if (error) {
@@ -654,41 +706,49 @@ typedef NS_ENUM(NSInteger, HRActionSheetTag) {
                                          [self.seasonsData addObjectsFromArray:seasonsData];
                                      }
                                      
-                                     /* Если озвучка не восстановлена из истории, используем значение сайта. */
-                                     if (self.selectedTranslatorId == 0 && defaultTranslatorId > 0) {
-                                         self.selectedTranslatorId = defaultTranslatorId;
+                                     /*
+                                      История и избранное могут содержать ID озвучки,
+                                      которой больше нет среди доступных для этой карточки.
+                                      В таком случае выбираем озвучку сайта, а если её нет
+                                      в списке — первую реально доступную озвучку.
+                                      */
+                                     BOOL selectedTranslatorExists = NO;
+                                     BOOL defaultTranslatorExists = NO;
+                                     NSInteger firstTranslatorId = 0;
+                                     for (NSDictionary *translator in self.translators) {
+                                         NSInteger translatorId = [[translator objectForKey:@"id"] integerValue];
+                                         if (firstTranslatorId == 0) firstTranslatorId = translatorId;
+                                         if (translatorId == self.selectedTranslatorId) selectedTranslatorExists = YES;
+                                         if (translatorId == defaultTranslatorId) defaultTranslatorExists = YES;
                                      }
                                      
-                                     /* Проверяем восстановленный сезон и серию. */
-                                     if (self.isSeriesMovie && [self.seasonsData count] > 0) {
-                                         NSDictionary *selectedSeasonData = nil;
-                                         
-                                         for (NSDictionary *season in self.seasonsData) {
-                                             if ([[season objectForKey:@"id"] integerValue] == self.selectedSeason) {
-                                                 selectedSeasonData = season;
-                                                 break;
-                                             }
+                                     if ([self.translators count] > 0 && !selectedTranslatorExists) {
+                                         if (defaultTranslatorId > 0 && defaultTranslatorExists) {
+                                             self.selectedTranslatorId = defaultTranslatorId;
+                                         } else {
+                                             self.selectedTranslatorId = firstTranslatorId;
                                          }
-                                         
-                                         if (!selectedSeasonData) {
-                                             selectedSeasonData = [self.seasonsData objectAtIndex:0];
-                                             self.selectedSeason = [[selectedSeasonData objectForKey:@"id"] integerValue];
-                                         }
-                                         
-                                         NSArray *episodes = [selectedSeasonData objectForKey:@"episodes"];
-                                         BOOL episodeExists = NO;
-                                         
-                                         for (NSDictionary *episode in episodes) {
-                                             if ([[episode objectForKey:@"id"] integerValue] == self.selectedEpisode) {
-                                                 episodeExists = YES;
-                                                 break;
-                                             }
-                                         }
-                                         
-                                         if (!episodeExists && [episodes count] > 0) {
-                                             self.selectedEpisode = [[[episodes objectAtIndex:0] objectForKey:@"id"] integerValue];
+                                     } else if (self.selectedTranslatorId == 0) {
+                                         if (defaultTranslatorId > 0 && defaultTranslatorExists) {
+                                             self.selectedTranslatorId = defaultTranslatorId;
+                                         } else if (firstTranslatorId > 0) {
+                                             self.selectedTranslatorId = firstTranslatorId;
                                          }
                                      }
+                                     
+                                     /*
+                                      Список сезонов из HTML относится к озвучке по умолчанию.
+                                      Если восстанавливаемая озвучка другая, сбрасываем этот список:
+                                      requestVideoStreams запросит get_episodes для выбранной озвучки.
+                                      */
+                                     if (self.selectedTranslatorId != defaultTranslatorId) {
+                                         [self.seasonsData removeAllObjects];
+                                         self.selectedSeason = 0;
+                                         self.selectedEpisode = 0;
+                                     }
+                                     
+                                     /* Проверяем восстановленные сезон и серию по актуальным данным. */
+                                     [self normalizeSeasonAndEpisodeSelection];
                                      
                                      /*
                                       Не используем initialStreams как окончательный поток: HTML может
@@ -704,18 +764,58 @@ typedef NS_ENUM(NSInteger, HRActionSheetTag) {
                                  }];
 }
 
+- (void)normalizeSeasonAndEpisodeSelection
+{
+    if (!self.isSeriesMovie || [self.seasonsData count] == 0) {
+        self.selectedSeason = 0;
+        self.selectedEpisode = 0;
+        return;
+    }
+    
+    NSDictionary *selectedSeasonData = nil;
+    for (NSDictionary *seasonData in self.seasonsData) {
+        if ([[seasonData objectForKey:@"id"] integerValue] == self.selectedSeason) {
+            selectedSeasonData = seasonData;
+            break;
+        }
+    }
+    
+    if (!selectedSeasonData) {
+        selectedSeasonData = [self.seasonsData objectAtIndex:0];
+        self.selectedSeason = [[selectedSeasonData objectForKey:@"id"] integerValue];
+    }
+    
+    NSArray *episodes = [selectedSeasonData objectForKey:@"episodes"];
+    if (![episodes isKindOfClass:[NSArray class]] || [episodes count] == 0) {
+        self.selectedEpisode = 0;
+        return;
+    }
+    
+    BOOL episodeExists = NO;
+    for (NSDictionary *episodeData in episodes) {
+        if ([[episodeData objectForKey:@"id"] integerValue] == self.selectedEpisode) {
+            episodeExists = YES;
+            break;
+        }
+    }
+    
+    if (!episodeExists) {
+        self.selectedEpisode = [[[episodes objectAtIndex:0] objectForKey:@"id"] integerValue];
+    }
+}
+
 - (void)requestVideoStreams
 {
     [self.spinner startAnimating];
     
     NSString *action = @"get_movie";
     if (self.isSeriesMovie) {
-        if ([self.seasonsData count] == 0) {
-            action = @"get_episodes";
-        } else {
-            action = @"get_stream";
-        }
+        action = ([self.seasonsData count] == 0) ? @"get_episodes" : @"get_stream";
     }
+    
+    /* Игнорируем ответы старых запросов после смены озвучки/сезона/серии. */
+    self.streamRequestGeneration++;
+    NSUInteger requestGeneration = self.streamRequestGeneration;
     
     [HRStreamResolver fetchStreamsForMovieId:self.movie.movieId
                                 translatorId:self.selectedTranslatorId
@@ -724,28 +824,41 @@ typedef NS_ENUM(NSInteger, HRActionSheetTag) {
                                     isSeries:self.isSeriesMovie
                                       action:action
                                   completion:^(NSDictionary *streams, NSString *subtitles, NSArray *updatedSeasonsData, NSError *error) {
+                                      if (requestGeneration != self.streamRequestGeneration) return;
                                       [self.spinner stopAnimating];
                                       
-                                      if (updatedSeasonsData && [updatedSeasonsData count] > 0) {
+                                      if (error) {
+                                          self.currentStreams = nil;
+                                          self.currentSubtitles = nil;
+                                          [self.tableView reloadData];
+                                          return;
+                                      }
+                                      
+                                      if (updatedSeasonsData) {
                                           [self.seasonsData removeAllObjects];
                                           [self.seasonsData addObjectsFromArray:updatedSeasonsData];
-                                          
-                                          if (self.selectedSeason == 0 || self.selectedEpisode == 0) {
-                                              self.selectedSeason = [[[self.seasonsData objectAtIndex:0] objectForKey:@"id"] integerValue];
-                                              NSArray *eps = [[self.seasonsData objectAtIndex:0] objectForKey:@"episodes"];
-                                              if ([eps count] > 0) {
-                                                  self.selectedEpisode = [[[eps objectAtIndex:0] objectForKey:@"id"] integerValue];
-                                              }
+                                          [self normalizeSeasonAndEpisodeSelection];
+                                      }
+                                      
+                                      if ([action isEqualToString:@"get_episodes"] && [self.seasonsData count] > 0) {
+                                          /* Первый ответ обновляет фактические сезоны озвучки;
+                                           затем запрашиваем поток уже для допустимой серии. */
+                                          self.currentStreams = nil;
+                                          self.currentSubtitles = nil;
+                                          [self.tableView reloadData];
+                                          if (self.selectedSeason > 0 && self.selectedEpisode > 0) {
+                                              [self requestVideoStreams];
                                           }
+                                          return;
                                       }
                                       
                                       if (streams && [streams count] > 0) {
                                           self.currentStreams = streams;
                                           self.currentSubtitles = subtitles;
                                           [self syncSelectedQualityWithAvailableStreams];
-                                      } else if ([action isEqualToString:@"get_episodes"] && [self.seasonsData count] > 0) {
-                                          [self requestVideoStreams];
-                                          return;
+                                      } else {
+                                          self.currentStreams = nil;
+                                          self.currentSubtitles = nil;
                                       }
                                       
                                       [self.tableView reloadData];
@@ -976,37 +1089,24 @@ typedef NS_ENUM(NSInteger, HRActionSheetTag) {
 - (void)darkActionSheet:(id)sheet didSelectIndex:(NSInteger)index withTag:(NSInteger)tag
 {
     if (tag == HRActionSheetTagTranslator) {
-        if (index < [self.translators count]) {
+        if (index >= 0 && index < [self.translators count]) {
             NSDictionary *t = [self.translators objectAtIndex:index];
-            self.selectedTranslatorId = [[t objectForKey:@"id"] integerValue];
+            NSInteger newTranslatorId = [[t objectForKey:@"id"] integerValue];
+            if (newTranslatorId == self.selectedTranslatorId) return;
+            
+            self.selectedTranslatorId = newTranslatorId;
+            
+            /* Сезоны/серии принадлежат конкретной озвучке. Не используем
+             список и поток от предыдущего переводчика. */
+            [self.seasonsData removeAllObjects];
+            self.selectedSeason = 0;
+            self.selectedEpisode = 0;
+            self.currentStreams = nil;
+            self.currentSubtitles = nil;
+            
             [self saveCurrentHistory];
             [self.tableView reloadData];
-            
-            NSString *action = self.isSeriesMovie ? @"get_episodes" : @"get_movie";
-            
-            [self.spinner startAnimating];
-            [HRStreamResolver fetchStreamsForMovieId:self.movie.movieId
-                                        translatorId:self.selectedTranslatorId
-                                              season:self.selectedSeason
-                                             episode:self.selectedEpisode
-                                            isSeries:self.isSeriesMovie
-                                              action:action
-                                          completion:^(NSDictionary *streams, NSString *subtitles, NSArray *updatedSeasonsData, NSError *error) {
-                                              [self.spinner stopAnimating];
-                                              
-                                              if (updatedSeasonsData && [updatedSeasonsData count] > 0) {
-                                                  [self.seasonsData removeAllObjects];
-                                                  [self.seasonsData addObjectsFromArray:updatedSeasonsData];
-                                              }
-                                              
-                                              if (streams && [streams count] > 0) {
-                                                  self.currentStreams = streams;
-                                                  [self syncSelectedQualityWithAvailableStreams];
-                                              } else if (self.isSeriesMovie) {
-                                                  [self requestVideoStreams];
-                                              }
-                                              [self.tableView reloadData];
-                                          }];
+            [self requestVideoStreams];
         }
     }
     else if (tag == HRActionSheetTagSeason) {
@@ -1080,228 +1180,228 @@ typedef NS_ENUM(NSInteger, HRActionSheetTag) {
         if (self.isSeriesMovie && [self.seasonsData count] > 0) {
             switch (buttonIndex) {
                 case 0: [self downloadCurrentVideo]; break;
-                case 1: [self downloadEntireSeason]; break;  
-                case 2: [self shareCurrentVideoM3U]; break;  
-                case 3: [self shareEntireSeasonM3U]; break;  
-                default: break;  
-            }  
-        } else {  
-            switch (buttonIndex) {  
-                case 0: [self downloadCurrentVideo]; break;  
-                case 1: [self shareCurrentVideoM3U]; break;  
-                default: break;  
-            }  
-        }  
-    }  
-}  
+                case 1: [self downloadEntireSeason]; break;
+                case 2: [self shareCurrentVideoM3U]; break;
+                case 3: [self shareEntireSeasonM3U]; break;
+                default: break;
+            }
+        } else {
+            switch (buttonIndex) {
+                case 0: [self downloadCurrentVideo]; break;
+                case 1: [self shareCurrentVideoM3U]; break;
+                default: break;
+            }
+        }
+    }
+}
 
-#pragma mark - Воспроизведение и Загрузка  
+#pragma mark - Воспроизведение и Загрузка
 
-- (void)playCurrentVideoInPlayer  
-{  
-    NSString *streamURL = [self bestStreamURLForCurrentSelection];  
-    if (!streamURL || [streamURL length] == 0) {  
-        [self requestVideoStreams];  
-        [self showSimpleAlertTitle:@"Подождите" message:@"Запрашиваем прямую ссылку у сервера..."];  
-        return;  
-    }  
+- (void)playCurrentVideoInPlayer
+{
+    NSString *streamURL = [self bestStreamURLForCurrentSelection];
+    if (!streamURL || [streamURL length] == 0) {
+        [self requestVideoStreams];
+        [self showSimpleAlertTitle:@"Подождите" message:@"Запрашиваем прямую ссылку у сервера..."];
+        return;
+    }
     
-    streamURL = [streamURL stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];  
-    streamURL = [streamURL stringByAddingPercentEscapesUsingEncoding:NSUTF8StringEncoding];  
+    streamURL = [streamURL stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    streamURL = [streamURL stringByAddingPercentEscapesUsingEncoding:NSUTF8StringEncoding];
     
-    NSURL *videoURL = [NSURL URLWithString:streamURL];  
-    if (!videoURL) {  
-        [self showSimpleAlertTitle:@"Ошибка" message:@"Прямая ссылка имеет неверный формат."];  
-        return;  
-    }  
+    NSURL *videoURL = [NSURL URLWithString:streamURL];
+    if (!videoURL) {
+        [self showSimpleAlertTitle:@"Ошибка" message:@"Прямая ссылка имеет неверный формат."];
+        return;
+    }
     
-    HRGestureMoviePlayerViewController *playerVC = [[HRGestureMoviePlayerViewController alloc] initWithContentURL:videoURL];  
-    [playerVC.moviePlayer prepareToPlay];  
-    [self presentMoviePlayerViewControllerAnimated:playerVC];  
-}  
+    HRGestureMoviePlayerViewController *playerVC = [[HRGestureMoviePlayerViewController alloc] initWithContentURL:videoURL];
+    [playerVC.moviePlayer prepareToPlay];
+    [self presentMoviePlayerViewControllerAnimated:playerVC];
+}
 
-- (void)downloadCurrentVideo  
-{  
-    NSString *streamURL = [self bestStreamURLForCurrentSelection];  
-    if (!streamURL || [streamURL length] == 0) {  
-        [self showSimpleAlertTitle:@"Ошибка" message:@"Прямая ссылка еще не получена."];  
-        return;  
-    }  
+- (void)downloadCurrentVideo
+{
+    NSString *streamURL = [self bestStreamURLForCurrentSelection];
+    if (!streamURL || [streamURL length] == 0) {
+        [self showSimpleAlertTitle:@"Ошибка" message:@"Прямая ссылка еще не получена."];
+        return;
+    }
     
-    NSString *taskTitle = self.movie.title ?: @"Видео";  
-    NSString *subTitle = self.isSeriesMovie ? [NSString stringWithFormat:@"Сезон %ld, Серия %ld (%@)", (long)self.selectedSeason, (long)self.selectedEpisode, self.selectedQuality] : [NSString stringWithFormat:@"Фильм (%@)", self.selectedQuality];  
-    NSString *taskId = self.isSeriesMovie ? [NSString stringWithFormat:@"%@_s%ld_e%ld", self.movie.movieId, (long)self.selectedSeason, (long)self.selectedEpisode] : [NSString stringWithFormat:@"%@_movie", self.movie.movieId];  
+    NSString *taskTitle = self.movie.title ?: @"Видео";
+    NSString *subTitle = self.isSeriesMovie ? [NSString stringWithFormat:@"Сезон %ld, Серия %ld (%@)", (long)self.selectedSeason, (long)self.selectedEpisode, self.selectedQuality] : [NSString stringWithFormat:@"Фильм (%@)", self.selectedQuality];
+    NSString *taskId = self.isSeriesMovie ? [NSString stringWithFormat:@"%@_s%ld_e%ld", self.movie.movieId, (long)self.selectedSeason, (long)self.selectedEpisode] : [NSString stringWithFormat:@"%@_movie", self.movie.movieId];
     
-    [[HRDownloadManager sharedManager] downloadMovieTitle:taskTitle  
-                                                 subtitle:subTitle  
-                                                urlString:streamURL  
-                                                   taskId:taskId];  
+    [[HRDownloadManager sharedManager] downloadMovieTitle:taskTitle
+                                                 subtitle:subTitle
+                                                urlString:streamURL
+                                                   taskId:taskId];
     
-    [self showSimpleAlertTitle:@"Загрузка началась" message:@"Значок загрузок на главной стал зелёным. Загрузка продолжится в фоне."];  
-}  
+    [self showSimpleAlertTitle:@"Загрузка началась" message:@"Значок загрузок на главной стал зелёным. Загрузка продолжится в фоне."];
+}
 
-- (void)copyCurrentVideoM3U  
-{  
-    NSString *streamURL = [self bestStreamURLForCurrentSelection];  
-    if (!streamURL || [streamURL length] == 0) {  
-        [self showSimpleAlertTitle:@"Ошибка" message:@"Прямая ссылка на видео еще не получена."];  
-        return;  
-    }  
+- (void)copyCurrentVideoM3U
+{
+    NSString *streamURL = [self bestStreamURLForCurrentSelection];
+    if (!streamURL || [streamURL length] == 0) {
+        [self showSimpleAlertTitle:@"Ошибка" message:@"Прямая ссылка на видео еще не получена."];
+        return;
+    }
     
-    NSString *title = self.isSeriesMovie ? [NSString stringWithFormat:@"%@ - S%02ldE%02ld", self.movie.title, (long)self.selectedSeason, (long)self.selectedEpisode] : self.movie.title;  
-    [[HRDownloadManager sharedManager] copySingleVideoToClipboardTitle:title urlString:streamURL];  
+    NSString *title = self.isSeriesMovie ? [NSString stringWithFormat:@"%@ - S%02ldE%02ld", self.movie.title, (long)self.selectedSeason, (long)self.selectedEpisode] : self.movie.title;
+    [[HRDownloadManager sharedManager] copySingleVideoToClipboardTitle:title urlString:streamURL];
     
-    [self showSimpleAlertTitle:@"Скопировано" message:@"M3U-ссылка скопирована в буфер обмена."];  
-}  
+    [self showSimpleAlertTitle:@"Скопировано" message:@"M3U-ссылка скопирована в буфер обмена."];
+}
 
-- (void)shareM3UContent:(NSString *)content suggestedName:(NSString *)name  
-{  
-    if (![content isKindOfClass:[NSString class]] || [content length] == 0) {  
-        [self showSimpleAlertTitle:@"Ошибка" message:@"Плейлист пустой — нечего передавать."];  
-        return;  
-    }  
+- (void)shareM3UContent:(NSString *)content suggestedName:(NSString *)name
+{
+    if (![content isKindOfClass:[NSString class]] || [content length] == 0) {
+        [self showSimpleAlertTitle:@"Ошибка" message:@"Плейлист пустой — нечего передавать."];
+        return;
+    }
     
-    NSString *safeName = [name stringByReplacingOccurrencesOfString:@"/" withString:@"-"];  
-    if ([safeName length] == 0) safeName = @"playlist";  
-    if (![safeName hasSuffix:@".m3u"]) safeName = [safeName stringByAppendingString:@".m3u"];  
+    NSString *safeName = [name stringByReplacingOccurrencesOfString:@"/" withString:@"-"];
+    if ([safeName length] == 0) safeName = @"playlist";
+    if (![safeName hasSuffix:@".m3u"]) safeName = [safeName stringByAppendingString:@".m3u"];
     
-    NSString *path = [NSTemporaryDirectory() stringByAppendingPathComponent:safeName];  
-    NSError *error = nil;  
-    if (![content writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:&error]) {  
-        [self showSimpleAlertTitle:@"Ошибка" message:@"Не удалось создать файл плейлиста."];  
-        return;  
-    }  
+    NSString *path = [NSTemporaryDirectory() stringByAppendingPathComponent:safeName];
+    NSError *error = nil;
+    if (![content writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:&error]) {
+        [self showSimpleAlertTitle:@"Ошибка" message:@"Не удалось создать файл плейлиста."];
+        return;
+    }
     
-    NSURL *fileURL = [NSURL fileURLWithPath:path];  
-    self.m3uDocumentInteractionController = [UIDocumentInteractionController interactionControllerWithURL:fileURL];  
-    self.m3uDocumentInteractionController.delegate = self;  
+    NSURL *fileURL = [NSURL fileURLWithPath:path];
+    self.m3uDocumentInteractionController = [UIDocumentInteractionController interactionControllerWithURL:fileURL];
+    self.m3uDocumentInteractionController.delegate = self;
     
-    // Показываем именно меню приложений, которые зарегистрировали поддержку открытия файлов.  
-    // На iPad используем небольшую центральную область-якорь, а не весь экран.  
-    // Это помогает избежать некорректного позиционирования popover-меню.  
-    CGRect bounds = self.view.bounds;  
-    CGRect anchorRect = CGRectMake(CGRectGetMidX(bounds),  
-                                   CGRectGetMidY(bounds),  
-                                   1.0,  
-                                   1.0);  
-    BOOL shown = [self.m3uDocumentInteractionController presentOpenInMenuFromRect:anchorRect  
-                                                                           inView:self.view  
-                                                                         animated:YES];  
-    if (!shown) {  
-        [self showSimpleAlertTitle:@"Нет подходящего приложения"  
-                           message:@"iOS не нашла приложение, зарегистрированное для открытия файла M3U. Проверь, поддерживает ли установленный плеер импорт M3U-файлов через меню «Открыть в…». Файл плейлиста создан во временной папке приложения."];  
-    }  
-}  
+    // Показываем именно меню приложений, которые зарегистрировали поддержку открытия файлов.
+    // На iPad используем небольшую центральную область-якорь, а не весь экран.
+    // Это помогает избежать некорректного позиционирования popover-меню.
+    CGRect bounds = self.view.bounds;
+    CGRect anchorRect = CGRectMake(CGRectGetMidX(bounds),
+                                   CGRectGetMidY(bounds),
+                                   1.0,
+                                   1.0);
+    BOOL shown = [self.m3uDocumentInteractionController presentOpenInMenuFromRect:anchorRect
+                                                                           inView:self.view
+                                                                         animated:YES];
+    if (!shown) {
+        [self showSimpleAlertTitle:@"Нет подходящего приложения"
+                           message:@"iOS не нашла приложение, зарегистрированное для открытия файла M3U. Проверь, поддерживает ли установленный плеер импорт M3U-файлов через меню «Открыть в…». Файл плейлиста создан во временной папке приложения."];
+    }
+}
 
-- (void)shareCurrentVideoM3U  
-{  
-    NSString *streamURL = [self bestStreamURLForCurrentSelection];  
-    if (![streamURL length]) {  
-        [self showSimpleAlertTitle:@"Ошибка" message:@"Прямая ссылка на видео еще не получена."];  
-        return;  
-    }  
+- (void)shareCurrentVideoM3U
+{
+    NSString *streamURL = [self bestStreamURLForCurrentSelection];
+    if (![streamURL length]) {
+        [self showSimpleAlertTitle:@"Ошибка" message:@"Прямая ссылка на видео еще не получена."];
+        return;
+    }
     
-    NSString *title = self.isSeriesMovie ? [NSString stringWithFormat:@"%@ - S%02ldE%02ld", self.movie.title, (long)self.selectedSeason, (long)self.selectedEpisode] : (self.movie.title ?: @"Видео");  
-    NSString *content = [NSString stringWithFormat:@"#EXTM3U\n#EXTINF:-1,%@\n%@\n", title, streamURL];  
-    [self shareM3UContent:content suggestedName:title];  
-}  
+    NSString *title = self.isSeriesMovie ? [NSString stringWithFormat:@"%@ - S%02ldE%02ld", self.movie.title, (long)self.selectedSeason, (long)self.selectedEpisode] : (self.movie.title ?: @"Видео");
+    NSString *content = [NSString stringWithFormat:@"#EXTM3U\n#EXTINF:-1,%@\n%@\n", title, streamURL];
+    [self shareM3UContent:content suggestedName:title];
+}
 
-- (void)shareEntireSeasonM3U  
-{  
-    [self.spinner startAnimating];  
-    NSArray *episodesList = [self episodesForSelectedSeason];  
+- (void)shareEntireSeasonM3U
+{
+    [self.spinner startAnimating];
+    NSArray *episodesList = [self episodesForSelectedSeason];
     
-    [HRStreamResolver fetchSeasonEpisodeStreamsForMovieId:self.movie.movieId  
-                                             translatorId:self.selectedTranslatorId  
-                                                   season:self.selectedSeason  
-                                             episodesList:episodesList  
-                                         preferredQuality:self.selectedQuality  
-                                               completion:^(NSArray *resolvedEpisodes) {  
-                                                   [self.spinner stopAnimating];  
-                                                   if (![resolvedEpisodes count]) {  
-                                                       [self showSimpleAlertTitle:@"Ошибка" message:@"Не удалось получить ссылки на серии сезона."];  
-                                                       return;  
-                                                   }  
+    [HRStreamResolver fetchSeasonEpisodeStreamsForMovieId:self.movie.movieId
+                                             translatorId:self.selectedTranslatorId
+                                                   season:self.selectedSeason
+                                             episodesList:episodesList
+                                         preferredQuality:self.selectedQuality
+                                               completion:^(NSArray *resolvedEpisodes) {
+                                                   [self.spinner stopAnimating];
+                                                   if (![resolvedEpisodes count]) {
+                                                       [self showSimpleAlertTitle:@"Ошибка" message:@"Не удалось получить ссылки на серии сезона."];
+                                                       return;
+                                                   }
                                                    
-                                                   NSMutableString *m3u = [NSMutableString stringWithString:@"#EXTM3U\n"];  
-                                                   NSString *seasonTitle = [NSString stringWithFormat:@"Сезон %ld", (long)self.selectedSeason];  
-                                                   for (NSDictionary *ep in resolvedEpisodes) {  
-                                                       NSString *epName = [ep objectForKey:@"title"] ?: @"Серия";  
-                                                       NSString *epURL = [ep objectForKey:@"url"] ?: @"";  
-                                                       if ([epURL length] > 0) {  
-                                                           [m3u appendFormat:@"#EXTINF:-1,%@ - %@ (%@)\n%@\n", self.movie.title ?: @"Видео", seasonTitle, epName, epURL];  
-                                                       }  
-                                                   }  
-                                                   NSString *fileName = [NSString stringWithFormat:@"%@ - %@", self.movie.title ?: @"Видео", seasonTitle];  
-                                                   [self shareM3UContent:m3u suggestedName:fileName];  
-                                               }];  
-}  
+                                                   NSMutableString *m3u = [NSMutableString stringWithString:@"#EXTM3U\n"];
+                                                   NSString *seasonTitle = [NSString stringWithFormat:@"Сезон %ld", (long)self.selectedSeason];
+                                                   for (NSDictionary *ep in resolvedEpisodes) {
+                                                       NSString *epName = [ep objectForKey:@"title"] ?: @"Серия";
+                                                       NSString *epURL = [ep objectForKey:@"url"] ?: @"";
+                                                       if ([epURL length] > 0) {
+                                                           [m3u appendFormat:@"#EXTINF:-1,%@ - %@ (%@)\n%@\n", self.movie.title ?: @"Видео", seasonTitle, epName, epURL];
+                                                       }
+                                                   }
+                                                   NSString *fileName = [NSString stringWithFormat:@"%@ - %@", self.movie.title ?: @"Видео", seasonTitle];
+                                                   [self shareM3UContent:m3u suggestedName:fileName];
+                                               }];
+}
 
-- (void)copyEntireSeasonM3U  
-{  
-    [self.spinner startAnimating];  
-    NSArray *episodesList = [self episodesForSelectedSeason];  
+- (void)copyEntireSeasonM3U
+{
+    [self.spinner startAnimating];
+    NSArray *episodesList = [self episodesForSelectedSeason];
     
-    [HRStreamResolver fetchSeasonEpisodeStreamsForMovieId:self.movie.movieId  
-                                             translatorId:self.selectedTranslatorId  
-                                                   season:self.selectedSeason  
-                                             episodesList:episodesList  
-                                         preferredQuality:self.selectedQuality  
-                                               completion:^(NSArray *resolvedEpisodes) {  
-                                                   [self.spinner stopAnimating];  
-                                                   if (!resolvedEpisodes || [resolvedEpisodes count] == 0) {  
-                                                       [self showSimpleAlertTitle:@"Ошибка" message:@"Не удалось получить ссылки на серии сезона."];  
-                                                       return;  
-                                                   }  
+    [HRStreamResolver fetchSeasonEpisodeStreamsForMovieId:self.movie.movieId
+                                             translatorId:self.selectedTranslatorId
+                                                   season:self.selectedSeason
+                                             episodesList:episodesList
+                                         preferredQuality:self.selectedQuality
+                                               completion:^(NSArray *resolvedEpisodes) {
+                                                   [self.spinner stopAnimating];
+                                                   if (!resolvedEpisodes || [resolvedEpisodes count] == 0) {
+                                                       [self showSimpleAlertTitle:@"Ошибка" message:@"Не удалось получить ссылки на серии сезона."];
+                                                       return;
+                                                   }
                                                    
-                                                   NSString *seasonTitle = [NSString stringWithFormat:@"Сезон %ld", (long)self.selectedSeason];  
-                                                   [[HRDownloadManager sharedManager] copySeasonPlaylistToClipboardTitle:self.movie.title  
-                                                                                                             seasonTitle:seasonTitle  
-                                                                                                                episodes:resolvedEpisodes];  
+                                                   NSString *seasonTitle = [NSString stringWithFormat:@"Сезон %ld", (long)self.selectedSeason];
+                                                   [[HRDownloadManager sharedManager] copySeasonPlaylistToClipboardTitle:self.movie.title
+                                                                                                             seasonTitle:seasonTitle
+                                                                                                                episodes:resolvedEpisodes];
                                                    
-                                                   NSString *msg = [NSString stringWithFormat:@"Плейлист сезона (%lu серий) скопирован в буфер обмена!", (unsigned long)[resolvedEpisodes count]];  
-                                                   [self showSimpleAlertTitle:@"M3U готов" message:msg];  
-                                               }];  
-}  
+                                                   NSString *msg = [NSString stringWithFormat:@"Плейлист сезона (%lu серий) скопирован в буфер обмена!", (unsigned long)[resolvedEpisodes count]];
+                                                   [self showSimpleAlertTitle:@"M3U готов" message:msg];
+                                               }];
+}
 
-- (void)downloadEntireSeason  
-{  
-    [self.spinner startAnimating];  
-    NSArray *episodesList = [self episodesForSelectedSeason];  
+- (void)downloadEntireSeason
+{
+    [self.spinner startAnimating];
+    NSArray *episodesList = [self episodesForSelectedSeason];
     
-    [HRStreamResolver fetchSeasonEpisodeStreamsForMovieId:self.movie.movieId  
-                                             translatorId:self.selectedTranslatorId  
-                                                   season:self.selectedSeason  
-                                             episodesList:episodesList  
-                                         preferredQuality:self.selectedQuality  
-                                               completion:^(NSArray *resolvedEpisodes) {  
-                                                   [self.spinner stopAnimating];  
-                                                   if (!resolvedEpisodes || [resolvedEpisodes count] == 0) {  
-                                                       [self showSimpleAlertTitle:@"Ошибка" message:@"Не удалось получить список серий сезона."];  
-                                                       return;  
-                                                   }  
+    [HRStreamResolver fetchSeasonEpisodeStreamsForMovieId:self.movie.movieId
+                                             translatorId:self.selectedTranslatorId
+                                                   season:self.selectedSeason
+                                             episodesList:episodesList
+                                         preferredQuality:self.selectedQuality
+                                               completion:^(NSArray *resolvedEpisodes) {
+                                                   [self.spinner stopAnimating];
+                                                   if (!resolvedEpisodes || [resolvedEpisodes count] == 0) {
+                                                       [self showSimpleAlertTitle:@"Ошибка" message:@"Не удалось получить список серий сезона."];
+                                                       return;
+                                                   }
                                                    
-                                                   for (NSDictionary *ep in resolvedEpisodes) {  
-                                                       NSString *epName = [ep objectForKey:@"title"];  
-                                                       NSString *epUrl = [ep objectForKey:@"url"];  
-                                                       NSNumber *epNum = [ep objectForKey:@"episode"];  
+                                                   for (NSDictionary *ep in resolvedEpisodes) {
+                                                       NSString *epName = [ep objectForKey:@"title"];
+                                                       NSString *epUrl = [ep objectForKey:@"url"];
+                                                       NSNumber *epNum = [ep objectForKey:@"episode"];
                                                        
-                                                       NSString *taskId = [NSString stringWithFormat:@"%@_s%ld_e%@", self.movie.movieId, (long)self.selectedSeason, epNum];  
-                                                       NSString *subTitle = [NSString stringWithFormat:@"Сезон %ld, %@", (long)self.selectedSeason, epName];  
+                                                       NSString *taskId = [NSString stringWithFormat:@"%@_s%ld_e%@", self.movie.movieId, (long)self.selectedSeason, epNum];
+                                                       NSString *subTitle = [NSString stringWithFormat:@"Сезон %ld, %@", (long)self.selectedSeason, epName];
                                                        
-                                                       [[HRDownloadManager sharedManager] downloadMovieTitle:self.movie.title  
-                                                                                                    subtitle:subTitle  
-                                                                                                   urlString:epUrl  
-                                                                                                      taskId:taskId];  
-                                                   }  
+                                                       [[HRDownloadManager sharedManager] downloadMovieTitle:self.movie.title
+                                                                                                    subtitle:subTitle
+                                                                                                   urlString:epUrl
+                                                                                                      taskId:taskId];
+                                                   }
                                                    
-                                                   NSString *msg = [NSString stringWithFormat:@"В очередь загрузки добавлено серий: %lu", (unsigned long)[resolvedEpisodes count]];  
-                                                   [self showSimpleAlertTitle:@"Сезон в очереди" message:msg];  
-                                               }];  
-}  
+                                                   NSString *msg = [NSString stringWithFormat:@"В очередь загрузки добавлено серий: %lu", (unsigned long)[resolvedEpisodes count]];
+                                                   [self showSimpleAlertTitle:@"Сезон в очереди" message:msg];
+                                               }];
+}
 
-- (void)showSimpleAlertTitle:(NSString *)title message:(NSString *)msg  
-{  
+- (void)showSimpleAlertTitle:(NSString *)title message:(NSString *)msg
+{
     UIAlertView *alert = [[UIAlertView alloc] initWithTitle:title  
                                                     message:msg  
                                                    delegate:nil  

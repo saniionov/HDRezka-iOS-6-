@@ -111,6 +111,37 @@
     }
 }
 
+- (NSString *)cleanInfoForDisplay:(NSString *)info
+{
+    if (![info isKindOfClass:[NSString class]] || [info length] == 0) {
+        return @"";
+    }
+    
+    /* Убираем служебные отметки прогресса, сохранённые в info истории/избранного. */
+    NSMutableString *cleanInfo = [NSMutableString stringWithString:info];
+    while (YES) {
+        NSRange markerRange = [cleanInfo rangeOfString:@"[S:"];
+        if (markerRange.location == NSNotFound) {
+            break;
+        }
+        
+        NSRange endRange = [cleanInfo rangeOfString:@"]" options:0
+                                              range:NSMakeRange(markerRange.location, [cleanInfo length] - markerRange.location)];
+        if (endRange.location == NSNotFound) {
+            break;
+        }
+        
+        NSString *marker = [cleanInfo substringWithRange:NSMakeRange(markerRange.location, endRange.location - markerRange.location + 1)];
+        if ([marker rangeOfString:@"E:"].location != NSNotFound) {
+            [cleanInfo deleteCharactersInRange:NSMakeRange(markerRange.location, endRange.location - markerRange.location + 1)];
+        } else {
+            break;
+        }
+    }
+    
+    return [cleanInfo stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+}
+
 - (void)configureWithMovie:(HRMovie *)movie
 {
     self.titleLabel.text = movie.title ?: @"";
@@ -128,7 +159,7 @@
         self.subtitleLabel.text = [NSString stringWithFormat:@"★ %@ • %@", movie.rating, self.subtitleLabel.text];
     }
     
-    self.descriptionTextLabel.text = movie.info ?: @"";
+    self.descriptionTextLabel.text = [self cleanInfoForDisplay:movie.info];
 }
 
 @end
