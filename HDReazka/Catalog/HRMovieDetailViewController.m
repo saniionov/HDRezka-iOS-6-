@@ -5,409 +5,13 @@
 #import "HRDatabase.h"
 #import "HRDownloadManager.h"
 #import "HRTheme.h"
+#import "HRSelectionSheet.h"
+#import "HRM3UExporter.h"
+#import "HRGestureMoviePlayerViewController.h"
 #import <MediaPlayer/MediaPlayer.h>
 #import <QuartzCore/QuartzCore.h>
 
-#pragma mark - Кастомное чёрно-красное всплывающее меню
-
-@protocol HRDarkActionSheetDelegate <NSObject>
-- (void)darkActionSheet:(id)sheet didSelectIndex:(NSInteger)index withTag:(NSInteger)tag;
-@end
-
-@interface HRDarkActionSheet : UIView <UITableViewDelegate, UITableViewDataSource>
-@property (nonatomic, strong) UIView *dimmerView;
-@property (nonatomic, strong) UIView *containerView;
-@property (nonatomic, strong) UITableView *tableView;
-@property (nonatomic, strong) NSArray *items;
-@property (nonatomic, assign) NSInteger actionTag;
-@property (nonatomic, weak) id<HRDarkActionSheetDelegate> delegate;
-@end
-
-@implementation HRDarkActionSheet
-
-- (instancetype)initWithTitle:(NSString *)title items:(NSArray *)items delegate:(id<HRDarkActionSheetDelegate>)delegate tag:(NSInteger)tag {
-    self = [super initWithFrame:CGRectZero];
-    if (self) {
-        self.items = items;
-        self.delegate = delegate;
-        self.actionTag = tag;
-        self.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-        
-        self.dimmerView = [[UIView alloc] init];
-        self.dimmerView.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.65];
-        self.dimmerView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-        self.dimmerView.alpha = 0.0;
-        [self addSubview:self.dimmerView];
-        
-        UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(dismiss)];
-        [self.dimmerView addGestureRecognizer:tap];
-        
-        self.containerView = [[UIView alloc] init];
-        self.containerView.backgroundColor = [UIColor colorWithRed:0.11 green:0.11 blue:0.11 alpha:1.0];
-        self.containerView.layer.cornerRadius = 8.0;
-        self.containerView.layer.borderColor = [UIColor colorWithRed:0.70 green:0.12 blue:0.12 alpha:1.0].CGColor;
-        self.containerView.layer.borderWidth = 1.5;
-        self.containerView.clipsToBounds = YES;
-        self.containerView.alpha = 0.0;
-        self.containerView.transform = CGAffineTransformMakeScale(1.1, 1.1);
-        [self addSubview:self.containerView];
-        
-        CGFloat w = (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) ? 320.0f : 280.0f;
-        UILabel *titleLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, w, 44)];
-        titleLabel.backgroundColor = [UIColor colorWithRed:0.06 green:0.06 blue:0.06 alpha:1.0];
-        titleLabel.textColor = [UIColor colorWithWhite:0.95 alpha:1.0];
-        titleLabel.font = [UIFont boldSystemFontOfSize:16.0];
-        titleLabel.textAlignment = NSTextAlignmentCenter;
-        titleLabel.text = title;
-        [self.containerView addSubview:titleLabel];
-        
-        UIView *separator = [[UIView alloc] initWithFrame:CGRectMake(0, 43, w, 1)];
-        separator.backgroundColor = [UIColor colorWithRed:0.70 green:0.12 blue:0.12 alpha:1.0];
-        [self.containerView addSubview:separator];
-        
-        self.tableView = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStylePlain];
-        self.tableView.backgroundColor = [UIColor clearColor];
-        self.tableView.separatorColor = [UIColor colorWithWhite:0.20 alpha:1.0];
-        self.tableView.dataSource = self;
-        self.tableView.delegate = self;
-        [self.containerView addSubview:self.tableView];
-    }
-    return self;
-}
-
-- (void)layoutSubviews {
-    [super layoutSubviews];
-    
-    self.dimmerView.frame = self.bounds;
-    
-    CGFloat w = (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) ? 320.0f : 280.0f;
-    CGFloat maxH = self.bounds.size.height - 80;
-    CGFloat tableH = self.items.count * 44.0;
-    if (tableH > maxH - 44) tableH = maxH - 44;
-    
-    CGFloat totalH = tableH + 44;
-    
-    self.containerView.frame = CGRectMake((self.bounds.size.width - w)/2.0f,
-                                          (self.bounds.size.height - totalH)/2.0f,
-                                          w, totalH);
-    self.tableView.frame = CGRectMake(0, 44, w, tableH);
-}
-
-- (void)showInView:(UIView *)view {
-    self.frame = view.bounds;
-    [view addSubview:self];
-    [self setNeedsLayout];
-    
-    [UIView animateWithDuration:0.2 animations:^{
-        self.dimmerView.alpha = 1.0;
-        self.containerView.alpha = 1.0;
-        self.containerView.transform = CGAffineTransformIdentity;
-    }];
-}
-
-- (void)dismiss {
-    [UIView animateWithDuration:0.2 animations:^{
-        self.dimmerView.alpha = 0.0;
-        self.containerView.alpha = 0.0;
-        self.containerView.transform = CGAffineTransformMakeScale(0.9, 0.9);
-    } completion:^(BOOL finished) {
-        [self removeFromSuperview];
-    }];
-}
-
-- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-    return self.items.count;
-}
-
-- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
-    static NSString *cellId = @"DarkMenuCell";
-    UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:cellId];
-    if (!cell) {
-        cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:cellId];
-        cell.backgroundColor = [UIColor clearColor];
-        cell.textLabel.textColor = [UIColor whiteColor];
-        cell.textLabel.font = [UIFont systemFontOfSize:15.0];
-        cell.textLabel.textAlignment = NSTextAlignmentCenter;
-        
-        UIView *selBg = [[UIView alloc] init];
-        selBg.backgroundColor = [UIColor colorWithRed:0.70 green:0.12 blue:0.12 alpha:1.0];
-        cell.selectedBackgroundView = selBg;
-    }
-    cell.textLabel.text = self.items[indexPath.row];
-    return cell;
-}
-
-- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
-    [tableView deselectRowAtIndexPath:indexPath animated:YES];
-    if (self.delegate && [self.delegate respondsToSelector:@selector(darkActionSheet:didSelectIndex:withTag:)]) {
-        [self.delegate darkActionSheet:self didSelectIndex:indexPath.row withTag:self.actionTag];
-    }
-    [self dismiss];
-}
-@end
-
-
-#pragma mark - Кастомный видеоплеер (Графическая яркость слева / Перемотка 20с)
-
-@interface HRGestureMoviePlayerViewController ()
-@property (nonatomic, strong) UIView *brightnessDimmerView;
-
-@property (nonatomic, strong) UIView *brightnessHintContainer;
-@property (nonatomic, strong) UIView *brightnessTrackView;
-@property (nonatomic, strong) UIView *brightnessFillView;
-
-@property (nonatomic, strong) UILabel *osdLabel;
-@property (nonatomic, assign) CGFloat startBrightness;
-@property (nonatomic, assign) NSTimeInterval startPlaybackTime;
-@property (nonatomic, assign) NSInteger lastAppliedStepCount;
-@property (nonatomic, assign) NSInteger panDirection;
-@end
-
-@implementation HRGestureMoviePlayerViewController
-
-- (void)dealloc
-{
-    [[NSNotificationCenter defaultCenter] removeObserver:self];
-}
-
-- (void)viewDidLoad
-{
-    [super viewDidLoad];
-    
-    self.brightnessDimmerView = [[UIView alloc] initWithFrame:self.view.bounds];
-    self.brightnessDimmerView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    self.brightnessDimmerView.backgroundColor = [UIColor blackColor];
-    self.brightnessDimmerView.alpha = 0.0f;
-    self.brightnessDimmerView.userInteractionEnabled = NO;
-    [self.view addSubview:self.brightnessDimmerView];
-    
-    self.osdLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, 220, 54)];
-    self.osdLabel.center = CGPointMake(self.view.bounds.size.width / 2.0f, self.view.bounds.size.height / 2.0f);
-    self.osdLabel.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin;
-    self.osdLabel.backgroundColor = [UIColor colorWithWhite:0.0f alpha:0.78f];
-    self.osdLabel.textColor = [UIColor whiteColor];
-    self.osdLabel.font = [UIFont boldSystemFontOfSize:17.0f];
-    self.osdLabel.textAlignment = NSTextAlignmentCenter;
-    self.osdLabel.layer.cornerRadius = 10.0f;
-    self.osdLabel.layer.masksToBounds = YES;
-    self.osdLabel.alpha = 0.0f;
-    self.osdLabel.userInteractionEnabled = NO;
-    [self.view addSubview:self.osdLabel];
-    
-    self.brightnessHintContainer = [[UIView alloc] initWithFrame:CGRectMake(20, 0, 60, 200)];
-    self.brightnessHintContainer.autoresizingMask = UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin | UIViewAutoresizingFlexibleRightMargin;
-    self.brightnessHintContainer.backgroundColor = [UIColor clearColor];
-    self.brightnessHintContainer.layer.cornerRadius = 10.0;
-    self.brightnessHintContainer.alpha = 0.0f;
-    self.brightnessHintContainer.userInteractionEnabled = NO;
-    
-    UILabel *sunLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 15, 60, 40)];
-    sunLabel.backgroundColor = [UIColor clearColor];
-    sunLabel.textColor = [UIColor whiteColor];
-    sunLabel.font = [UIFont systemFontOfSize:38.0];
-    sunLabel.textAlignment = NSTextAlignmentCenter;
-    sunLabel.text = @"☀";
-    [self.brightnessHintContainer addSubview:sunLabel];
-    
-    self.brightnessTrackView = [[UIView alloc] initWithFrame:CGRectMake(25, 70, 10, 110)];
-    self.brightnessTrackView.backgroundColor = [UIColor clearColor];
-    self.brightnessTrackView.layer.cornerRadius = 5.0;
-    self.brightnessTrackView.clipsToBounds = YES;
-    [self.brightnessHintContainer addSubview:self.brightnessTrackView];
-    
-    self.brightnessFillView = [[UIView alloc] initWithFrame:CGRectMake(0, 110, 10, 0)];
-    self.brightnessFillView.backgroundColor = [UIColor whiteColor];
-    [self.brightnessTrackView addSubview:self.brightnessFillView];
-    
-    [self.view addSubview:self.brightnessHintContainer];
-    self.brightnessHintContainer.center = CGPointMake(50, self.view.bounds.size.height / 2.0f);
-    
-    if ([[UIScreen mainScreen] respondsToSelector:@selector(brightness)]) {
-        [self updateBrightnessUI:[UIScreen mainScreen].brightness];
-    }
-    
-    UIPanGestureRecognizer *panGesture = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handleScreenPan:)];
-    panGesture.delegate = self;
-    panGesture.maximumNumberOfTouches = 1;
-    [self.view addGestureRecognizer:panGesture];
-    
-    UITapGestureRecognizer *singleTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleScreenTap:)];
-    singleTap.delegate = self;
-    singleTap.cancelsTouchesInView = NO;
-    [self.view addGestureRecognizer:singleTap];
-    
-    [[NSNotificationCenter defaultCenter] addObserver:self
-                                             selector:@selector(playbackStateChanged:)
-                                                 name:MPMoviePlayerPlaybackStateDidChangeNotification
-                                               object:self.moviePlayer];
-}
-
-- (void)handleScreenTap:(UITapGestureRecognizer *)tap
-{
-    [self showBrightnessHint];
-}
-
-- (void)playbackStateChanged:(NSNotification *)note
-{
-    [self showBrightnessHint];
-}
-
-- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldReceiveTouch:(UITouch *)touch
-{
-    if ([gestureRecognizer isKindOfClass:[UITapGestureRecognizer class]]) {
-        return YES;
-    }
-    
-    CGPoint pt = [touch locationInView:self.view];
-    CGFloat h = self.view.bounds.size.height;
-    if (pt.y < h * 0.25f || pt.y > h * 0.75f) {
-        return NO;
-    }
-    return YES;
-}
-
-- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherGestureRecognizer
-{
-    return YES;
-}
-
-- (void)updateBrightnessUI:(CGFloat)brightness
-{
-    CGFloat trackH = self.brightnessTrackView.bounds.size.height;
-    CGFloat fillH = trackH * brightness;
-    self.brightnessFillView.frame = CGRectMake(0, trackH - fillH, self.brightnessTrackView.bounds.size.width, fillH);
-}
-
-- (void)showBrightnessHint
-{
-    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(hideBrightnessHint) object:nil];
-    [UIView animateWithDuration:0.2 animations:^{
-        self.brightnessHintContainer.alpha = 1.0f;
-    }];
-    
-    if (self.moviePlayer.playbackState == MPMoviePlaybackStatePlaying) {
-        [self performSelector:@selector(hideBrightnessHint) withObject:nil afterDelay:3.5];
-    }
-}
-
-- (void)hideBrightnessHint
-{
-    [UIView animateWithDuration:0.4 animations:^{
-        self.brightnessHintContainer.alpha = 0.0f;
-    }];
-}
-
-- (void)showOSDText:(NSString *)text
-{
-    self.osdLabel.text = text;
-    self.osdLabel.center = CGPointMake(self.view.bounds.size.width / 2.0f, self.view.bounds.size.height / 2.0f);
-    [UIView animateWithDuration:0.12 animations:^{
-        self.osdLabel.alpha = 1.0f;
-    }];
-}
-
-- (void)hideOSDAnimated
-{
-    [UIView animateWithDuration:0.35 delay:0.45 options:0 animations:^{
-        self.osdLabel.alpha = 0.0f;
-    } completion:nil];
-}
-
-- (void)handleScreenPan:(UIPanGestureRecognizer *)pan
-{
-    CGSize screenSize = self.view.bounds.size;
-    CGFloat screenW = MAX(screenSize.width, 1.0f);
-    CGFloat screenH = MAX(screenSize.height, 1.0f);
-    
-    if (pan.state == UIGestureRecognizerStateBegan) {
-        self.panDirection = 0;
-        self.lastAppliedStepCount = 0;
-        
-        if ([[UIScreen mainScreen] respondsToSelector:@selector(brightness)]) {
-            self.startBrightness = [UIScreen mainScreen].brightness;
-        } else {
-            self.startBrightness = 1.0f - (self.brightnessDimmerView.alpha / 0.75f);
-        }
-        
-        self.startPlaybackTime = self.moviePlayer.currentPlaybackTime;
-        if (isnan(self.startPlaybackTime) || self.startPlaybackTime < 0) {
-            self.startPlaybackTime = 0;
-        }
-    }
-    else if (pan.state == UIGestureRecognizerStateChanged) {
-        CGPoint translation = [pan translationInView:self.view];
-        
-        if (self.panDirection == 0) {
-            if (fabsf(translation.x) > 10.0f || fabsf(translation.y) > 10.0f) {
-                self.panDirection = (fabsf(translation.x) > fabsf(translation.y)) ? 1 : 2;
-            } else {
-                return;
-            }
-        }
-        
-        if (self.panDirection == 1) {
-            CGFloat stepWidth = screenW / 5.5f;
-            if (stepWidth < 40.0f) stepWidth = 40.0f;
-            
-            NSInteger steps = (NSInteger)(translation.x / stepWidth);
-            if (steps == 0 && fabsf(translation.x) > 20.0f) {
-                steps = (translation.x > 0) ? 1 : -1;
-            }
-            
-            NSTimeInterval deltaSeconds = steps * 20.0;
-            NSTimeInterval duration = self.moviePlayer.duration;
-            NSTimeInterval targetTime = self.startPlaybackTime + deltaSeconds;
-            if (targetTime < 0) targetTime = 0;
-            if (duration > 0 && targetTime > duration) targetTime = duration - 1.0;
-            
-            NSString *sign = (deltaSeconds >= 0) ? @"+" : @"";
-            NSInteger mins = ((NSInteger)targetTime) / 60;
-            NSInteger secs = ((NSInteger)targetTime) % 60;
-            [self showOSDText:[NSString stringWithFormat:@"⏩ %@%ld сек (%02ld:%02ld)", sign, (long)deltaSeconds, (long)mins, (long)secs]];
-            
-            if (steps != self.lastAppliedStepCount) {
-                self.lastAppliedStepCount = steps;
-                self.moviePlayer.currentPlaybackTime = targetTime;
-            }
-        }
-        else if (self.panDirection == 2) {
-            CGPoint touchLocation = [pan locationInView:self.view];
-            
-            if (touchLocation.x < (screenW / 2.0f)) {
-                CGFloat effectiveHeight = screenH * 0.35f;
-                CGFloat deltaRatio = -translation.y / effectiveHeight;
-                CGFloat newBrightness = self.startBrightness + deltaRatio;
-                
-                if (newBrightness > 1.0f) newBrightness = 1.0f;
-                if (newBrightness < 0.05f) newBrightness = 0.05f;
-                
-                if ([[UIScreen mainScreen] respondsToSelector:@selector(setBrightness:)]) {
-                    [UIScreen mainScreen].brightness = newBrightness;
-                }
-                
-                self.brightnessDimmerView.alpha = (1.0f - newBrightness) * 0.70f;
-                
-                [self updateBrightnessUI:newBrightness];
-                [self showBrightnessHint];
-            }
-        }
-    }
-    else if (pan.state == UIGestureRecognizerStateEnded || pan.state == UIGestureRecognizerStateCancelled) {
-        if (self.panDirection == 1) {
-            [self hideOSDAnimated];
-        } else if (self.panDirection == 2) {
-            if (self.moviePlayer.playbackState == MPMoviePlaybackStatePlaying) {
-                [self performSelector:@selector(hideBrightnessHint) withObject:nil afterDelay:3.5];
-            }
-        }
-        self.panDirection = 0;
-    }
-}
-
-@end
-
-
-#pragma mark - Карточка фильма (HRMovieDetailViewController)
+#pragma mark - Типизация меню и секций
 
 typedef NS_ENUM(NSInteger, HRActionSheetTag) {
     HRActionSheetTagTranslator = 100,
@@ -417,16 +21,228 @@ typedef NS_ENUM(NSInteger, HRActionSheetTag) {
     HRActionSheetTagExport = 104
 };
 
-@interface HRMovieDetailViewController () <UITableViewDataSource, UITableViewDelegate, UIActionSheetDelegate, HRDarkActionSheetDelegate, UIDocumentInteractionControllerDelegate>
+typedef NS_ENUM(NSInteger, HRDetailSectionType) {
+    HRDetailSectionTranslator = 0,
+    HRDetailSectionSeason,
+    HRDetailSectionEpisode,
+    HRDetailSectionQuality,
+    HRDetailSectionPlay,
+    HRDetailSectionDownload
+};
+
+#pragma mark - Кастомная шапка для выступающих кнопок (iPad hitTest Fix)
+
+@interface HROverflowHeaderView : UIView
+@end
+
+@implementation HROverflowHeaderView
+
+- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event
+{
+    for (UIView *subview in [self.subviews reverseObjectEnumerator]) {
+        if (subview.userInteractionEnabled && !subview.hidden && subview.alpha > 0.01f) {
+            CGPoint subPoint = [subview convertPoint:point fromView:self];
+            if (CGRectContainsPoint(subview.bounds, subPoint)) {
+                UIView *hit = [subview hitTest:subPoint withEvent:event];
+                if (hit) return hit;
+            }
+        }
+    }
+    return [super hitTest:point withEvent:event];
+}
+
+@end
+
+#pragma mark - Кастомная ячейка меню
+
+@interface HRMenuGradientCell : UITableViewCell
+@property (nonatomic, strong) UIView *customBgView;
+@property (nonatomic, strong) UIView *customSelView;
+@property (nonatomic, strong) CAGradientLayer *normalGlossLayer;
+@property (nonatomic, strong) CAGradientLayer *selectedGlossLayer;
+
+@property (nonatomic, strong) UILabel *customTextLabel;
+@property (nonatomic, strong) UILabel *customDetailLabel;
+@property (nonatomic, strong) UIImageView *arrowImageView;
+@end
+
+@implementation HRMenuGradientCell
+
+- (id)initWithStyle:(UITableViewCellStyle)style reuseIdentifier:(NSString *)reuseIdentifier
+{
+    self = [super initWithStyle:style reuseIdentifier:reuseIdentifier];
+    if (self) {
+        self.selectionStyle = UITableViewCellSelectionStyleNone;
+        self.accessoryType = UITableViewCellAccessoryNone;
+        
+        self.backgroundColor = [UIColor clearColor];
+        self.contentView.backgroundColor = [UIColor clearColor];
+        self.backgroundView = nil;
+        self.selectedBackgroundView = nil;
+        
+        CGFloat screenScale = [UIScreen mainScreen].scale;
+        BOOL isPad = (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad);
+        CGFloat menuFontSize = isPad ? 18.0f : 16.5f;
+        
+        _customBgView = [[UIView alloc] initWithFrame:self.bounds];
+        _customBgView.layer.cornerRadius = 9.0f;
+        _customBgView.layer.masksToBounds = YES;
+        _customBgView.layer.borderWidth = 0.0f;
+        _customBgView.backgroundColor = [UIColor clearColor];
+        
+        _normalGlossLayer = [CAGradientLayer layer];
+        _normalGlossLayer.contentsScale = screenScale;
+        _normalGlossLayer.locations = @[@(0.0f), @(1.0f)];
+        _normalGlossLayer.colors = @[
+                                     (id)[UIColor colorWithRed:0.180f green:0.180f blue:0.190f alpha:1.0f].CGColor,
+                                     (id)[UIColor colorWithRed:0.150f green:0.150f blue:0.161f alpha:1.0f].CGColor
+                                     ];
+        [_customBgView.layer insertSublayer:_normalGlossLayer atIndex:0];
+        
+        _customSelView = [[UIView alloc] initWithFrame:self.bounds];
+        _customSelView.layer.cornerRadius = 9.0f;
+        _customSelView.layer.masksToBounds = YES;
+        _customSelView.layer.borderWidth = 0.0f;
+        _customSelView.backgroundColor = [UIColor clearColor];
+        
+        _selectedGlossLayer = [CAGradientLayer layer];
+        _selectedGlossLayer.contentsScale = screenScale;
+        _selectedGlossLayer.locations = @[@(0.0f), @(1.0f)];
+        _selectedGlossLayer.colors = @[
+                                       (id)[UIColor colorWithRed:0.110f green:0.110f blue:0.120f alpha:1.0f].CGColor,
+                                       (id)[UIColor colorWithRed:0.110f green:0.110f blue:0.120f alpha:1.0f].CGColor
+                                       ];
+        [_customSelView.layer insertSublayer:_selectedGlossLayer atIndex:0];
+        
+        [self addSubview:_customBgView];
+        [self addSubview:_customSelView];
+        _customSelView.hidden = YES;
+        
+        _customTextLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+        _customTextLabel.backgroundColor = [UIColor clearColor];
+        _customTextLabel.font = [UIFont boldSystemFontOfSize:menuFontSize];
+        _customTextLabel.textColor = [UIColor colorWithWhite:0.92f alpha:1.0f];
+        _customTextLabel.shadowColor = [UIColor clearColor];
+        _customTextLabel.shadowOffset = CGSizeZero;
+        [_customBgView addSubview:_customTextLabel];
+        
+        _customDetailLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+        _customDetailLabel.backgroundColor = [UIColor clearColor];
+        _customDetailLabel.font = [UIFont boldSystemFontOfSize:menuFontSize];
+        _customDetailLabel.textColor = [UIColor colorWithRed:0.95f green:0.25f blue:0.25f alpha:1.0f];
+        _customDetailLabel.shadowColor = [UIColor clearColor];
+        _customDetailLabel.shadowOffset = CGSizeZero;
+        _customDetailLabel.textAlignment = NSTextAlignmentRight;
+        [_customBgView addSubview:_customDetailLabel];
+        
+        _arrowImageView = [[UIImageView alloc] initWithFrame:CGRectZero];
+        _arrowImageView.contentMode = UIViewContentModeCenter;
+        _arrowImageView.image = [self drawDisclosureIndicator];
+        [_customBgView addSubview:_arrowImageView];
+    }
+    return self;
+}
+
+- (void)setHighlighted:(BOOL)highlighted animated:(BOOL)animated
+{
+    [super setHighlighted:highlighted animated:animated];
+    self.customSelView.hidden = !highlighted;
+}
+
+- (void)setSelected:(BOOL)selected animated:(BOOL)animated
+{
+    [super setSelected:selected animated:animated];
+    self.customSelView.hidden = !selected;
+}
+
+- (void)layoutSubviews
+{
+    [super layoutSubviews];
+    
+    BOOL isPad = (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad);
+    
+    CGRect btnFrame;
+    if (isPad) {
+        CGFloat pad = 28.0f;
+        CGFloat posterW = 250.0f;
+        CGFloat columnGap = 20.0f;
+        
+        CGFloat rightX = pad + posterW + columnGap;
+        CGFloat rightW = self.bounds.size.width - rightX - pad;
+        btnFrame = CGRectMake(rightX, 0.0f, rightW, self.bounds.size.height);
+    } else {
+        CGFloat sideMargin = 10.0f;
+        btnFrame = CGRectMake(sideMargin,
+                              0.0f,
+                              self.bounds.size.width - (sideMargin * 2.0f),
+                              self.bounds.size.height);
+    }
+    
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    self.customBgView.frame = btnFrame;
+    self.customSelView.frame = btnFrame;
+    self.normalGlossLayer.frame = self.customBgView.bounds;
+    self.selectedGlossLayer.frame = self.customSelView.bounds;
+    [CATransaction commit];
+    
+    CGFloat w = btnFrame.size.width;
+    CGFloat h = btnFrame.size.height;
+    CGFloat innerPad = isPad ? 16.0f : 12.0f;
+    
+    CGFloat arrowW = isPad ? 12.0f : 10.0f;
+    CGFloat arrowH = isPad ? 16.0f : 14.0f;
+    CGFloat arrowX = w - innerPad - arrowW;
+    self.arrowImageView.frame = CGRectMake(arrowX, floorf((h - arrowH) / 2.0f), arrowW, arrowH);
+    
+    CGSize titleSize = [self.customTextLabel.text sizeWithFont:self.customTextLabel.font];
+    CGFloat titleW = ceilf(titleSize.width);
+    self.customTextLabel.frame = CGRectMake(innerPad, 0.0f, titleW, h);
+    
+    CGFloat detailX = innerPad + titleW + 8.0f;
+    CGFloat detailW = arrowX - 6.0f - detailX;
+    if (detailW < 0.0f) detailW = 0.0f;
+    self.customDetailLabel.frame = CGRectMake(detailX, 0.0f, detailW, h);
+}
+
+- (UIImage *)drawDisclosureIndicator
+{
+    BOOL isPad = (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad);
+    CGSize size = CGSizeMake(isPad ? 12.0f : 10.0f, isPad ? 16.0f : 14.0f);
+    UIGraphicsBeginImageContextWithOptions(size, NO, 0.0f);
+    UIBezierPath *path = [UIBezierPath bezierPath];
+    [path moveToPoint:CGPointMake(2.0f, 2.0f)];
+    [path addLineToPoint:CGPointMake(size.width - 3.0f, size.height / 2.0f)];
+    [path addLineToPoint:CGPointMake(2.0f, size.height - 2.0f)];
+    path.lineWidth = 2.0f;
+    path.lineCapStyle = kCGLineCapRound;
+    path.lineJoinStyle = kCGLineJoinRound;
+    [[UIColor colorWithWhite:0.55f alpha:1.0f] setStroke];
+    [path stroke];
+    UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return img;
+}
+
+@end
+
+#pragma mark - Контроллер карточки фильма
+
+@interface HRMovieDetailViewController () <UITableViewDataSource, UITableViewDelegate, HRSelectionSheetDelegate, HRGestureMoviePlayerDelegate>
 
 @property (nonatomic, strong) UITableView *tableView;
 @property (nonatomic, strong) UIImageView *posterImageView;
 @property (nonatomic, strong) UILabel *titleLabel;
-@property (nonatomic, strong) UILabel *metaLabel;
+@property (nonatomic, strong) UIButton *favoriteButton;
+
+@property (nonatomic, strong) UIButton *padPlayButton;
+@property (nonatomic, strong) UIButton *padDownloadButton;
+
+@property (nonatomic, strong) UIView *descriptionBlurContainer;
 @property (nonatomic, strong) UITextView *descriptionTextView;
 
 @property (nonatomic, strong) UIActivityIndicatorView *spinner;
-@property (nonatomic, strong) UIDocumentInteractionController *m3uDocumentInteractionController;
+@property (nonatomic, strong) HRM3UExporter *m3uExporter;
 @property (nonatomic, strong) NSMutableArray *translators;
 @property (nonatomic, strong) NSMutableArray *seasonsData;
 
@@ -441,7 +257,6 @@ typedef NS_ENUM(NSInteger, HRActionSheetTag) {
 @property (nonatomic, assign) NSUInteger streamRequestGeneration;
 @property (nonatomic, assign) NSUInteger detailRequestGeneration;
 
-// Объявления методов, чтобы компилятор не выдавал ошибки видимости
 - (void)playCurrentVideoInPlayer;
 - (void)downloadCurrentVideo;
 - (void)downloadEntireSeason;
@@ -449,10 +264,12 @@ typedef NS_ENUM(NSInteger, HRActionSheetTag) {
 - (void)copyEntireSeasonM3U;
 - (void)shareCurrentVideoM3U;
 - (void)shareEntireSeasonM3U;
-- (void)shareM3UContent:(NSString *)content suggestedName:(NSString *)name;
 - (void)showExportMenu;
 - (void)normalizeSeasonAndEpisodeSelection;
 - (void)requestVideoStreams;
+- (void)updatePadPlayButtonTitle;
+- (UIImage *)drawPlayIconWithColor:(UIColor *)color size:(CGSize)size;
+- (UIImage *)drawDownloadIconWithColor:(UIColor *)color size:(CGSize)size;
 
 @end
 
@@ -466,6 +283,7 @@ typedef NS_ENUM(NSInteger, HRActionSheetTag) {
         _isSeriesMovie = movie.isSeries;
         _translators = [[NSMutableArray alloc] init];
         _seasonsData = [[NSMutableArray alloc] init];
+        _m3uExporter = [[HRM3UExporter alloc] init];
         _selectedQuality = [[NSUserDefaults standardUserDefaults] stringForKey:@"HR_DEFAULT_QUALITY"] ?: @"720p";
         
         if (movie.rating && [movie.rating rangeOfString:@"|"].location != NSNotFound) {
@@ -478,9 +296,24 @@ typedef NS_ENUM(NSInteger, HRActionSheetTag) {
                 _selectedTranslatorId = [[parts objectAtIndex:2] integerValue];
             }
         } else {
-            _selectedSeason = 1;
-            _selectedEpisode = 1;
-            _selectedTranslatorId = 0;
+            NSArray *allHist = [[HRDatabase sharedDatabase] allHistory];
+            for (HRMovie *histMovie in allHist) {
+                if ([histMovie.movieId isEqualToString:movie.movieId] && histMovie.rating && [histMovie.rating rangeOfString:@"|"].location != NSNotFound) {
+                    NSArray *parts = [histMovie.rating componentsSeparatedByString:@"|"];
+                    if (parts.count >= 2) {
+                        _selectedSeason = [[parts objectAtIndex:0] integerValue];
+                        _selectedEpisode = [[parts objectAtIndex:1] integerValue];
+                    }
+                    if (parts.count >= 3) {
+                        _selectedTranslatorId = [[parts objectAtIndex:2] integerValue];
+                    }
+                    break;
+                }
+            }
+            
+            if (_selectedSeason <= 0) _selectedSeason = 1;
+            if (_selectedEpisode <= 0) _selectedEpisode = 1;
+            if (_selectedTranslatorId < 0) _selectedTranslatorId = 0;
         }
     }
     return self;
@@ -496,17 +329,9 @@ typedef NS_ENUM(NSInteger, HRActionSheetTag) {
                                                                               target:self
                                                                               action:@selector(backButtonTapped:)];
     
-    UIButton *refreshButton = [UIButton buttonWithType:UIButtonTypeCustom];
-    refreshButton.frame = CGRectMake(0.0f, 0.0f, 34.0f, 30.0f);
-    refreshButton.backgroundColor = [UIColor colorWithRed:0.10f green:0.10f blue:0.10f alpha:1.0f];
-    refreshButton.layer.cornerRadius = 5.0f;
-    refreshButton.layer.borderWidth = 1.0f;
-    refreshButton.layer.borderColor = [UIColor colorWithRed:0.72f green:0.08f blue:0.12f alpha:1.0f].CGColor;
-    refreshButton.titleLabel.font = [UIFont boldSystemFontOfSize:23.0f];
-    [refreshButton setTitle:@"↻" forState:UIControlStateNormal];
-    [refreshButton setTitleColor:[UIColor colorWithRed:0.95f green:0.18f blue:0.22f alpha:1.0f] forState:UIControlStateNormal];
-    [refreshButton addTarget:self action:@selector(refreshCardTapped:) forControlEvents:UIControlEventTouchUpInside];
-    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:refreshButton];
+    self.navigationItem.rightBarButtonItem = [HRTheme createGlossyBarButtonWithTitle:@"Обновить"
+                                                                              target:self
+                                                                              action:@selector(refreshCardTapped:)];
     
     [self setupHeaderAndTableView];
     
@@ -517,7 +342,13 @@ typedef NS_ENUM(NSInteger, HRActionSheetTag) {
     [self.view addSubview:self.spinner];
     
     [self loadMoviePageDetails];
-    [self saveCurrentHistory];
+}
+
+- (void)willAnimateRotationToInterfaceOrientation:(UIInterfaceOrientation)toInterfaceOrientation duration:(NSTimeInterval)duration
+{
+    [super willAnimateRotationToInterfaceOrientation:toInterfaceOrientation duration:duration];
+    [self setupHeaderAndTableView];
+    [self.tableView reloadData];
 }
 
 - (void)backButtonTapped:(id)sender
@@ -527,35 +358,12 @@ typedef NS_ENUM(NSInteger, HRActionSheetTag) {
 
 - (void)refreshCardTapped:(id)sender
 {
-    /* Инвалидируем ожидающий запрос потоков и повторно загружаем данные карточки. */
     self.streamRequestGeneration++;
     self.currentStreams = nil;
     self.currentSubtitles = nil;
+    [self updatePadPlayButtonTitle];
     [self.tableView reloadData];
     [self loadMoviePageDetails];
-}
-
-- (NSString *)movieInfoForDisplay
-{
-    NSString *info = self.movie.info;
-    if (![info isKindOfClass:[NSString class]] || [info length] == 0) {
-        return @"HDRezka";
-    }
-    
-    /* В старой схеме истории к info мог добавляться служебный маркер [S:x E:y].
-     Он нужен для восстановления позиции, но не должен отображаться в карточке. */
-    NSRange markerRange = [info rangeOfString:@"[S:"];
-    if (markerRange.location != NSNotFound) {
-        NSRange endRange = [info rangeOfString:@"]" options:0
-                                         range:NSMakeRange(markerRange.location, [info length] - markerRange.location)];
-        if (endRange.location != NSNotFound) {
-            info = [info stringByReplacingCharactersInRange:NSMakeRange(markerRange.location, endRange.location - markerRange.location + 1)
-                                                 withString:@""];
-        }
-    }
-    
-    info = [info stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    return ([info length] > 0) ? info : @"HDRezka";
 }
 
 - (void)saveCurrentHistory
@@ -569,34 +377,37 @@ typedef NS_ENUM(NSInteger, HRActionSheetTag) {
 - (void)setupHeaderAndTableView
 {
     BOOL isPad = (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad);
+    CGFloat targetRowHeight = isPad ? 52.0f : 46.0f;
     
-    self.tableView = [[UITableView alloc] initWithFrame:self.view.bounds style:UITableViewStyleGrouped];
-    self.tableView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    self.tableView.dataSource = self;
-    self.tableView.delegate = self;
-    self.tableView.rowHeight = isPad ? 52.0f : 44.0f;
-    self.tableView.backgroundColor = [UIColor colorWithRed:0.08 green:0.08 blue:0.08 alpha:1.0];
-    self.tableView.separatorColor = [UIColor colorWithWhite:0.20f alpha:1.0f];
+    if (!self.tableView) {
+        self.tableView = [[UITableView alloc] initWithFrame:self.view.bounds style:UITableViewStyleGrouped];
+        self.tableView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        self.tableView.dataSource = self;
+        self.tableView.delegate = self;
+        self.tableView.rowHeight = targetRowHeight;
+        self.tableView.backgroundColor = [UIColor colorWithRed:0.08 green:0.08 blue:0.08 alpha:1.0];
+        self.tableView.separatorColor = [UIColor clearColor];
+        
+        UIView *bgView = [[UIView alloc] initWithFrame:self.tableView.bounds];
+        bgView.backgroundColor = [UIColor colorWithRed:0.08 green:0.08 blue:0.08 alpha:1.0];
+        self.tableView.backgroundView = bgView;
+        [self.view addSubview:self.tableView];
+    } else {
+        self.tableView.rowHeight = targetRowHeight;
+    }
     
-    UIView *bgView = [[UIView alloc] initWithFrame:self.tableView.bounds];
-    bgView.backgroundColor = [UIColor colorWithRed:0.08 green:0.08 blue:0.08 alpha:1.0];
-    self.tableView.backgroundView = bgView;
-    
-    CGFloat headerH = isPad ? 330.0f : 220.0f;
-    CGFloat posterW = isPad ? 180.0f : 110.0f;
-    CGFloat posterH = isPad ? 260.0f : 160.0f;
-    CGFloat pad = isPad ? 24.0f : 12.0f;
-    
-    UIView *headerView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, self.view.bounds.size.width, headerH)];
-    headerView.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-    headerView.backgroundColor = [UIColor clearColor];
+    CGFloat posterW = isPad ? 250.0f : 110.0f;
+    CGFloat posterH = isPad ? 365.0f : 160.0f;
+    CGFloat pad = isPad ? 28.0f : 12.0f;
+    CGFloat favBtnH = isPad ? 42.0f : 30.0f;
+    CGFloat actionBtnH = 50.0f;
+    CGFloat actionGap = 10.0f;
     
     self.posterImageView = [[UIImageView alloc] initWithFrame:CGRectMake(pad, pad, posterW, posterH)];
     self.posterImageView.contentMode = UIViewContentModeScaleAspectFill;
     self.posterImageView.clipsToBounds = YES;
     self.posterImageView.backgroundColor = [UIColor colorWithWhite:0.15f alpha:1.0f];
-    self.posterImageView.layer.cornerRadius = isPad ? 6.0f : 3.0f;
-    [headerView addSubview:self.posterImageView];
+    self.posterImageView.layer.cornerRadius = isPad ? 8.0f : 3.0f;
     
     if (self.movie.posterURLString && [self.movie.posterURLString length] > 0) {
         [[HRImageCache sharedCache] loadImageForURLString:self.movie.posterURLString completion:^(UIImage *image) {
@@ -606,52 +417,133 @@ typedef NS_ENUM(NSInteger, HRActionSheetTag) {
         }];
     }
     
+    self.favoriteButton = [UIButton buttonWithType:UIButtonTypeCustom];
+    self.favoriteButton.frame = CGRectMake(pad, pad + posterH + 10.0f, posterW, favBtnH);
+    self.favoriteButton.backgroundColor = [UIColor colorWithRed:0.18 green:0.18 blue:0.18 alpha:1.0];
+    self.favoriteButton.layer.cornerRadius = isPad ? 8.0f : 5.0f;
+    self.favoriteButton.layer.borderWidth = 0.0f;
+    self.favoriteButton.titleLabel.font = [UIFont boldSystemFontOfSize:(isPad ? 15.0f : 12.0f)];
+    [self updateFavoriteButtonStyle];
+    [self.favoriteButton addTarget:self action:@selector(toggleFavorite:) forControlEvents:UIControlEventTouchUpInside];
+    
+    if (isPad) {
+        CGFloat actionTopGap = 20.0f;
+        CGFloat playY = pad + posterH + 10.0f + favBtnH + actionTopGap;
+        self.padPlayButton = [UIButton buttonWithType:UIButtonTypeCustom];
+        self.padPlayButton.frame = CGRectMake(pad, playY, posterW, actionBtnH);
+        self.padPlayButton.backgroundColor = [UIColor colorWithRed:0.449f green:0.030f blue:0.047f alpha:1.0f];
+        self.padPlayButton.layer.cornerRadius = 12.0f;
+        self.padPlayButton.layer.masksToBounds = YES;
+        self.padPlayButton.titleLabel.font = [UIFont boldSystemFontOfSize:16.0f];
+        [self.padPlayButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+        [self.padPlayButton setImage:[self drawPlayIconWithColor:[UIColor whiteColor] size:CGSizeMake(20.0f, 20.0f)] forState:UIControlStateNormal];
+        self.padPlayButton.imageEdgeInsets = UIEdgeInsetsMake(0, -8, 0, 8);
+        [self.padPlayButton addTarget:self action:@selector(playCurrentVideoInPlayer) forControlEvents:UIControlEventTouchUpInside];
+        
+        CGFloat dlY = playY + actionBtnH + actionGap;
+        self.padDownloadButton = [UIButton buttonWithType:UIButtonTypeCustom];
+        self.padDownloadButton.frame = CGRectMake(pad, dlY, posterW, actionBtnH);
+        self.padDownloadButton.backgroundColor = [UIColor colorWithRed:0.150f green:0.150f blue:0.161f alpha:1.0f];
+        self.padDownloadButton.layer.cornerRadius = 12.0f;
+        self.padDownloadButton.layer.masksToBounds = YES;
+        self.padDownloadButton.titleLabel.font = [UIFont boldSystemFontOfSize:16.0f];
+        [self.padDownloadButton setTitleColor:[UIColor colorWithWhite:0.92f alpha:1.0f] forState:UIControlStateNormal];
+        [self.padDownloadButton setTitle:@"Скачать / Плейлист" forState:UIControlStateNormal];
+        [self.padDownloadButton setImage:[self drawDownloadIconWithColor:[UIColor colorWithWhite:0.92f alpha:1.0f] size:CGSizeMake(20.0f, 20.0f)] forState:UIControlStateNormal];
+        self.padDownloadButton.imageEdgeInsets = UIEdgeInsetsMake(0, -8, 0, 8);
+        [self.padDownloadButton addTarget:self action:@selector(showExportMenu) forControlEvents:UIControlEventTouchUpInside];
+        
+        [self updatePadPlayButtonTitle];
+    } else {
+        self.padPlayButton = nil;
+        self.padDownloadButton = nil;
+    }
+    
     CGFloat textLeft = pad + posterW + (isPad ? 20.0f : 10.0f);
     CGFloat textWidth = self.view.bounds.size.width - textLeft - pad;
+    CGFloat titleH = isPad ? 68.0f : 42.0f;
     
-    self.titleLabel = [[UILabel alloc] initWithFrame:CGRectMake(textLeft, pad, textWidth, isPad ? 56.0f : 44.0f)];
+    self.titleLabel = [[UILabel alloc] initWithFrame:CGRectMake(textLeft, pad, textWidth, titleH)];
     self.titleLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-    self.titleLabel.font = [UIFont boldSystemFontOfSize:(isPad ? 22.0f : 16.0f)];
+    self.titleLabel.font = [UIFont boldSystemFontOfSize:(isPad ? 25.0f : 15.0f)];
     self.titleLabel.textColor = [UIColor whiteColor];
     self.titleLabel.backgroundColor = [UIColor clearColor];
     self.titleLabel.numberOfLines = 2;
     self.titleLabel.text = self.movie.title;
+    
+    CGFloat descY = pad + titleH + (isPad ? 10.0f : 4.0f);
+    CGFloat descBottom = isPad ? (pad + posterH) : (pad + posterH + 10.0f + favBtnH);
+    CGFloat descH = descBottom - descY;
+    
+    if (descH < 100.0f) descH = 100.0f;
+    
+    CGFloat headerH = descY + descH + (isPad ? 6.0f : 12.0f);
+    
+    HROverflowHeaderView *headerView = [[HROverflowHeaderView alloc] initWithFrame:CGRectMake(0.0f, 0.0f, self.view.bounds.size.width, headerH)];
+    headerView.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    headerView.backgroundColor = [UIColor clearColor];
+    
+    [headerView addSubview:self.posterImageView];
+    [headerView addSubview:self.favoriteButton];
+    if (isPad) {
+        [headerView addSubview:self.padPlayButton];
+        [headerView addSubview:self.padDownloadButton];
+    }
     [headerView addSubview:self.titleLabel];
     
-    self.metaLabel = [[UILabel alloc] initWithFrame:CGRectMake(textLeft, pad + (isPad ? 60.0f : 46.0f), textWidth, isPad ? 42.0f : 34.0f)];
-    self.metaLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-    self.metaLabel.font = [UIFont systemFontOfSize:(isPad ? 15.0f : 12.0f)];
-    self.metaLabel.textColor = [UIColor colorWithRed:0.85 green:0.25 blue:0.25 alpha:1.0];
-    self.metaLabel.backgroundColor = [UIColor clearColor];
-    self.metaLabel.numberOfLines = 2;
-    self.metaLabel.text = [self movieInfoForDisplay];
-    [headerView addSubview:self.metaLabel];
+    self.descriptionBlurContainer = [[UIView alloc] initWithFrame:CGRectMake(textLeft, descY, textWidth, descH)];
+    self.descriptionBlurContainer.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    self.descriptionBlurContainer.layer.cornerRadius = isPad ? 8.0f : 6.0f;
+    self.descriptionBlurContainer.layer.masksToBounds = YES;
+    self.descriptionBlurContainer.backgroundColor = [UIColor colorWithRed:0.10f green:0.10f blue:0.11f alpha:0.95f];
     
-    CGFloat descTop = pad + (isPad ? 106.0f : 82.0f);
-    CGFloat descH = isPad ? 190.0f : 80.0f;
-    self.descriptionTextView = [[UITextView alloc] initWithFrame:CGRectMake(textLeft, descTop, textWidth, descH)];
-    self.descriptionTextView.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    CGFloat screenScale = [UIScreen mainScreen].scale;
+    self.descriptionBlurContainer.layer.borderWidth = (screenScale >= 2.0f) ? 0.5f : 1.0f;
+    self.descriptionBlurContainer.layer.borderColor = [UIColor colorWithWhite:1.0f alpha:0.10f].CGColor;
+    
+    CGFloat innerPadX = isPad ? 12.0f : 6.0f;
+    CGFloat safeTextW = (textWidth - (innerPadX * 2.0f) > 0.0f) ? (textWidth - (innerPadX * 2.0f)) : textWidth;
+    CGRect textFrame = CGRectMake(innerPadX, 0.0f, safeTextW, descH);
+    
+    NSString *existingDesc = self.descriptionTextView.text;
+    self.descriptionTextView = [[UITextView alloc] initWithFrame:textFrame];
+    self.descriptionTextView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     self.descriptionTextView.backgroundColor = [UIColor clearColor];
-    self.descriptionTextView.textColor = [UIColor colorWithWhite:0.82f alpha:1.0f];
-    self.descriptionTextView.font = [UIFont systemFontOfSize:(isPad ? 15.0f : 12.0f)];
+    self.descriptionTextView.textColor = [UIColor colorWithWhite:0.92f alpha:1.0f];
+    self.descriptionTextView.font = [UIFont systemFontOfSize:(isPad ? 17.0f : 12.0f)];
     self.descriptionTextView.editable = NO;
-    self.descriptionTextView.text = @"Загрузка описания...";
-    [headerView addSubview:self.descriptionTextView];
+    self.descriptionTextView.scrollEnabled = YES;
+    self.descriptionTextView.alwaysBounceVertical = NO;
+    self.descriptionTextView.alwaysBounceHorizontal = NO;
+    self.descriptionTextView.showsHorizontalScrollIndicator = NO;
+    self.descriptionTextView.showsVerticalScrollIndicator = YES;
+    self.descriptionTextView.contentInset = UIEdgeInsetsMake(isPad ? 10.0f : 6.0f, 0.0f, isPad ? 10.0f : 6.0f, 0.0f);
+    self.descriptionTextView.text = ([existingDesc length] > 0) ? existingDesc : @"Загрузка описания...";
     
-    UIButton *favBtn = [UIButton buttonWithType:UIButtonTypeCustom];
-    favBtn.frame = CGRectMake(pad, pad + posterH + 8.0f, posterW, isPad ? 36.0f : 30.0f);
-    favBtn.backgroundColor = [UIColor colorWithRed:0.20 green:0.20 blue:0.20 alpha:1.0];
-    favBtn.layer.cornerRadius = 5.0f;
-    favBtn.titleLabel.font = [UIFont boldSystemFontOfSize:(isPad ? 14.0f : 12.0f)];
-    [favBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-    
-    BOOL isFav = [[HRDatabase sharedDatabase] isFavorite:self.movie.movieId];
-    [favBtn setTitle:(isFav ? @"★ В избранном" : @"☆ В избранное") forState:UIControlStateNormal];
-    [favBtn addTarget:self action:@selector(toggleFavorite:) forControlEvents:UIControlEventTouchUpInside];
-    [headerView addSubview:favBtn];
+    [self.descriptionBlurContainer addSubview:self.descriptionTextView];
+    [headerView addSubview:self.descriptionBlurContainer];
     
     self.tableView.tableHeaderView = headerView;
-    [self.view addSubview:self.tableView];
+}
+
+- (void)updatePadPlayButtonTitle
+{
+    if (self.padPlayButton) {
+        NSString *title = ([self.currentStreams count] > 0) ? @"Смотреть онлайн" : @"Загрузка потока...";
+        [self.padPlayButton setTitle:title forState:UIControlStateNormal];
+    }
+}
+
+- (void)updateFavoriteButtonStyle
+{
+    BOOL isFav = [[HRDatabase sharedDatabase] isFavorite:self.movie.movieId];
+    if (isFav) {
+        [self.favoriteButton setTitle:@"★ В избранном" forState:UIControlStateNormal];
+        [self.favoriteButton setTitleColor:[UIColor colorWithRed:0.90 green:0.18 blue:0.18 alpha:1.0] forState:UIControlStateNormal];
+    } else {
+        [self.favoriteButton setTitle:@"☆ В избранное" forState:UIControlStateNormal];
+        [self.favoriteButton setTitleColor:[UIColor colorWithWhite:0.75 alpha:1.0] forState:UIControlStateNormal];
+    }
 }
 
 - (void)toggleFavorite:(UIButton *)sender
@@ -659,17 +551,55 @@ typedef NS_ENUM(NSInteger, HRActionSheetTag) {
     BOOL isFav = [[HRDatabase sharedDatabase] isFavorite:self.movie.movieId];
     if (isFav) {
         [[HRDatabase sharedDatabase] removeFavoriteWithMovieId:self.movie.movieId];
-        [sender setTitle:@"☆ В избранное" forState:UIControlStateNormal];
     } else {
         NSString *sStr = [NSString stringWithFormat:@"%ld", (long)self.selectedSeason];
         NSString *eStr = [NSString stringWithFormat:@"%ld", (long)self.selectedEpisode];
         NSString *tStr = [NSString stringWithFormat:@"%ld", (long)self.selectedTranslatorId];
         [[HRDatabase sharedDatabase] addFavorite:self.movie season:sStr episode:eStr translatorId:tStr];
-        [sender setTitle:@"★ В избранном" forState:UIControlStateNormal];
     }
+    [self updateFavoriteButtonStyle];
 }
 
-#pragma mark - API: Загрузка страницы и видеопотоков
+#pragma mark - Значки для кнопок действий
+
+- (UIImage *)drawPlayIconWithColor:(UIColor *)color size:(CGSize)size
+{
+    UIGraphicsBeginImageContextWithOptions(size, NO, 0.0f);
+    UIBezierPath *path = [UIBezierPath bezierPath];
+    [path moveToPoint:CGPointMake(3.0f, 2.0f)];
+    [path addLineToPoint:CGPointMake(size.width - 2.0f, size.height / 2.0f)];
+    [path addLineToPoint:CGPointMake(3.0f, size.height - 2.0f)];
+    [path closePath];
+    [color setFill];
+    [path fill];
+    UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return img;
+}
+
+- (UIImage *)drawDownloadIconWithColor:(UIColor *)color size:(CGSize)size
+{
+    UIGraphicsBeginImageContextWithOptions(size, NO, 0.0f);
+    UIBezierPath *path = [UIBezierPath bezierPath];
+    CGFloat midX = size.width / 2.0f;
+    [path moveToPoint:CGPointMake(midX - 3.0f, 2.0f)];
+    [path addLineToPoint:CGPointMake(midX + 3.0f, 2.0f)];
+    [path addLineToPoint:CGPointMake(midX + 3.0f, size.height - 9.0f)];
+    [path addLineToPoint:CGPointMake(midX + 7.5f, size.height - 9.0f)];
+    [path addLineToPoint:CGPointMake(midX, size.height - 2.5f)];
+    [path addLineToPoint:CGPointMake(midX - 7.5f, size.height - 9.0f)];
+    [path addLineToPoint:CGPointMake(midX - 3.0f, size.height - 9.0f)];
+    [path closePath];
+    UIBezierPath *bar = [UIBezierPath bezierPathWithRect:CGRectMake(2.0f, size.height - 2.5f, size.width - 4.0f, 2.0f)];
+    [path appendPath:bar];
+    [color setFill];
+    [path fill];
+    UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return img;
+}
+
+#pragma mark - Загрузка страницы и потоков
 
 - (void)loadMoviePageDetails
 {
@@ -694,7 +624,8 @@ typedef NS_ENUM(NSInteger, HRActionSheetTag) {
                                      }
                                      
                                      self.isSeriesMovie = isSeries;
-                                     self.descriptionTextView.text = descriptionText;
+                                     self.descriptionTextView.text = ([descriptionText length] > 0) ? descriptionText : @"Описание отсутствует.";
+                                     [self.descriptionTextView setContentOffset:CGPointZero animated:NO];
                                      
                                      [self.translators removeAllObjects];
                                      if (translators) {
@@ -706,12 +637,6 @@ typedef NS_ENUM(NSInteger, HRActionSheetTag) {
                                          [self.seasonsData addObjectsFromArray:seasonsData];
                                      }
                                      
-                                     /*
-                                      История и избранное могут содержать ID озвучки,
-                                      которой больше нет среди доступных для этой карточки.
-                                      В таком случае выбираем озвучку сайта, а если её нет
-                                      в списке — первую реально доступную озвучку.
-                                      */
                                      BOOL selectedTranslatorExists = NO;
                                      BOOL defaultTranslatorExists = NO;
                                      NSInteger firstTranslatorId = 0;
@@ -736,27 +661,15 @@ typedef NS_ENUM(NSInteger, HRActionSheetTag) {
                                          }
                                      }
                                      
-                                     /*
-                                      Список сезонов из HTML относится к озвучке по умолчанию.
-                                      Если восстанавливаемая озвучка другая, сбрасываем этот список:
-                                      requestVideoStreams запросит get_episodes для выбранной озвучки.
-                                      */
                                      if (self.selectedTranslatorId != defaultTranslatorId) {
                                          [self.seasonsData removeAllObjects];
-                                         self.selectedSeason = 0;
-                                         self.selectedEpisode = 0;
                                      }
                                      
-                                     /* Проверяем восстановленные сезон и серию по актуальным данным. */
                                      [self normalizeSeasonAndEpisodeSelection];
                                      
-                                     /*
-                                      Не используем initialStreams как окончательный поток: HTML может
-                                      содержать поток для озвучки или серии по умолчанию на сайте.
-                                      Запрашиваем поток для состояния, восстановленного из истории.
-                                      */
                                      self.currentStreams = nil;
                                      self.currentSubtitles = nil;
+                                     [self updatePadPlayButtonTitle];
                                      
                                      [self.tableView reloadData];
                                      [self saveCurrentHistory];
@@ -766,9 +679,15 @@ typedef NS_ENUM(NSInteger, HRActionSheetTag) {
 
 - (void)normalizeSeasonAndEpisodeSelection
 {
-    if (!self.isSeriesMovie || [self.seasonsData count] == 0) {
+    if (!self.isSeriesMovie) {
         self.selectedSeason = 0;
         self.selectedEpisode = 0;
+        return;
+    }
+    
+    if ([self.seasonsData count] == 0) {
+        if (self.selectedSeason <= 0) self.selectedSeason = 1;
+        if (self.selectedEpisode <= 0) self.selectedEpisode = 1;
         return;
     }
     
@@ -787,7 +706,7 @@ typedef NS_ENUM(NSInteger, HRActionSheetTag) {
     
     NSArray *episodes = [selectedSeasonData objectForKey:@"episodes"];
     if (![episodes isKindOfClass:[NSArray class]] || [episodes count] == 0) {
-        self.selectedEpisode = 0;
+        if (self.selectedEpisode <= 0) self.selectedEpisode = 1;
         return;
     }
     
@@ -813,7 +732,6 @@ typedef NS_ENUM(NSInteger, HRActionSheetTag) {
         action = ([self.seasonsData count] == 0) ? @"get_episodes" : @"get_stream";
     }
     
-    /* Игнорируем ответы старых запросов после смены озвучки/сезона/серии. */
     self.streamRequestGeneration++;
     NSUInteger requestGeneration = self.streamRequestGeneration;
     
@@ -830,6 +748,7 @@ typedef NS_ENUM(NSInteger, HRActionSheetTag) {
                                       if (error) {
                                           self.currentStreams = nil;
                                           self.currentSubtitles = nil;
+                                          [self updatePadPlayButtonTitle];
                                           [self.tableView reloadData];
                                           return;
                                       }
@@ -841,10 +760,9 @@ typedef NS_ENUM(NSInteger, HRActionSheetTag) {
                                       }
                                       
                                       if ([action isEqualToString:@"get_episodes"] && [self.seasonsData count] > 0) {
-                                          /* Первый ответ обновляет фактические сезоны озвучки;
-                                           затем запрашиваем поток уже для допустимой серии. */
                                           self.currentStreams = nil;
                                           self.currentSubtitles = nil;
+                                          [self updatePadPlayButtonTitle];
                                           [self.tableView reloadData];
                                           if (self.selectedSeason > 0 && self.selectedEpisode > 0) {
                                               [self requestVideoStreams];
@@ -861,6 +779,7 @@ typedef NS_ENUM(NSInteger, HRActionSheetTag) {
                                           self.currentSubtitles = nil;
                                       }
                                       
+                                      [self updatePadPlayButtonTitle];
                                       [self.tableView reloadData];
                                   }];
 }
@@ -903,104 +822,221 @@ typedef NS_ENUM(NSInteger, HRActionSheetTag) {
     return @[];
 }
 
-#pragma mark - Таблица меню
+#pragma mark - Маппинг секций и таблицы
+
+- (HRDetailSectionType)sectionTypeForIndex:(NSInteger)section
+{
+    BOOL isPad = (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad);
+    if (isPad) {
+        if (self.isSeriesMovie) {
+            return (HRDetailSectionType)section;
+        } else {
+            return (section == 0) ? HRDetailSectionTranslator : HRDetailSectionQuality;
+        }
+    } else {
+        if (self.isSeriesMovie) {
+            return (HRDetailSectionType)section;
+        } else {
+            if (section == 0) return HRDetailSectionTranslator;
+            if (section == 1) return HRDetailSectionQuality;
+            if (section == 2) return HRDetailSectionPlay;
+            return HRDetailSectionDownload;
+        }
+    }
+}
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView
 {
-    return 2;
+    BOOL isPad = (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad);
+    if (isPad) {
+        return self.isSeriesMovie ? 4 : 2;
+    } else {
+        return self.isSeriesMovie ? 6 : 4;
+    }
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section
 {
-    if (section == 0) {
-        return self.isSeriesMovie ? 4 : 2;
+    return 1;
+}
+
+- (CGFloat)tableView:(UITableView *)tableView heightForHeaderInSection:(NSInteger)section
+{
+    return 0.01f;
+}
+
+- (UIView *)tableView:(UITableView *)tableView viewForHeaderInSection:(NSInteger)section
+{
+    return nil;
+}
+
+- (CGFloat)tableView:(UITableView *)tableView heightForFooterInSection:(NSInteger)section
+{
+    BOOL isPad = (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad);
+    HRDetailSectionType type = [self sectionTypeForIndex:section];
+    
+    if (type == HRDetailSectionTranslator || type == HRDetailSectionSeason || type == HRDetailSectionEpisode) {
+        return isPad ? 6.0f : 4.0f;
     }
-    return 2;
+    if (type == HRDetailSectionQuality) {
+        return isPad ? 0.01f : 10.0f;
+    }
+    if (type == HRDetailSectionPlay) {
+        return 8.0f;
+    }
+    return 10.0f;
+}
+
+- (UIView *)tableView:(UITableView *)tableView viewForFooterInSection:(NSInteger)section
+{
+    CGFloat h = [self tableView:tableView heightForFooterInSection:section];
+    UIView *v = [[UIView alloc] initWithFrame:CGRectMake(0, 0, tableView.bounds.size.width, h)];
+    v.backgroundColor = [UIColor clearColor];
+    return v;
+}
+
+- (void)tableView:(UITableView *)tableView willDisplayCell:(UITableViewCell *)cell forRowAtIndexPath:(NSIndexPath *)indexPath
+{
+    cell.backgroundColor = [UIColor clearColor];
+    cell.backgroundView = nil;
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath
 {
-    static NSString *cellID = @"CompactMenuCell";
-    UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:cellID];
-    if (!cell) {
-        cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1 reuseIdentifier:cellID];
-    }
+    HRDetailSectionType type = [self sectionTypeForIndex:indexPath.section];
     
-    cell.backgroundColor = [UIColor colorWithRed:0.14 green:0.14 blue:0.14 alpha:1.0];
-    cell.textLabel.textColor = [UIColor whiteColor];
-    cell.detailTextLabel.textColor = [UIColor colorWithRed:0.85 green:0.25 blue:0.25 alpha:1.0];
-    cell.textLabel.textAlignment = NSTextAlignmentLeft;
-    cell.detailTextLabel.text = nil;
-    cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
-    cell.selectionStyle = UITableViewCellSelectionStyleGray;
-    
-    if (indexPath.section == 0) {
-        if (self.isSeriesMovie) {
-            if (indexPath.row == 0) {
-                cell.textLabel.text = @"Озвучка";
-                cell.detailTextLabel.text = [self currentTranslatorName];
-            } else if (indexPath.row == 1) {
-                cell.textLabel.text = @"Сезон";
-                cell.detailTextLabel.text = [NSString stringWithFormat:@"Сезон %ld", (long)self.selectedSeason];
-            } else if (indexPath.row == 2) {
-                cell.textLabel.text = @"Серия";
-                cell.detailTextLabel.text = [NSString stringWithFormat:@"Серия %ld", (long)self.selectedEpisode];
-            } else if (indexPath.row == 3) {
-                cell.textLabel.text = @"Качество";
-                cell.detailTextLabel.text = self.selectedQuality ?: @"720p";
-            }
-        } else {
-            if (indexPath.row == 0) {
-                cell.textLabel.text = @"Озвучка";
-                cell.detailTextLabel.text = [self currentTranslatorName];
-            } else if (indexPath.row == 1) {
-                cell.textLabel.text = @"Качество";
-                cell.detailTextLabel.text = self.selectedQuality ?: @"720p";
-            }
+    if (type <= HRDetailSectionQuality) {
+        static NSString *MenuID = @"HRMenuGradientCellID";
+        HRMenuGradientCell *cell = [tableView dequeueReusableCellWithIdentifier:MenuID];
+        if (!cell) {
+            cell = [[HRMenuGradientCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:MenuID];
         }
-    } else if (indexPath.section == 1) {
-        cell.accessoryType = UITableViewCellAccessoryNone;
-        cell.textLabel.textAlignment = NSTextAlignmentCenter;
-        if (indexPath.row == 0) {
-            cell.textLabel.text = ([self.currentStreams count] > 0) ? @"▶ Смотреть онлайн" : @"⏳ Загрузка потока...";
-            cell.textLabel.textColor = [UIColor colorWithRed:0.20 green:0.80 blue:0.20 alpha:1.0];
-        } else {
-            cell.textLabel.text = @"⬇ Скачать / Плейлист M3U";
-            cell.textLabel.textColor = [UIColor colorWithRed:0.90 green:0.60 blue:0.20 alpha:1.0];
+        
+        switch (type) {
+            case HRDetailSectionTranslator:
+                cell.customTextLabel.text = @"Озвучка";
+                cell.customDetailLabel.text = [self currentTranslatorName];
+                break;
+            case HRDetailSectionSeason:
+                cell.customTextLabel.text = @"Сезон";
+                cell.customDetailLabel.text = [NSString stringWithFormat:@"Сезон %ld", (long)self.selectedSeason];
+                break;
+            case HRDetailSectionEpisode:
+                cell.customTextLabel.text = @"Серия";
+                cell.customDetailLabel.text = [NSString stringWithFormat:@"Серия %ld", (long)self.selectedEpisode];
+                break;
+            case HRDetailSectionQuality:
+                cell.customTextLabel.text = @"Качество";
+                cell.customDetailLabel.text = self.selectedQuality ?: @"720p";
+                break;
+            default:
+                break;
         }
+        return cell;
+    } else {
+        static NSString *ButtonID = @"ButtonCell";
+        UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:ButtonID];
+        if (!cell) {
+            cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:ButtonID];
+            cell.backgroundView = [[UIView alloc] initWithFrame:CGRectZero];
+            cell.backgroundColor = [UIColor clearColor];
+            cell.contentView.backgroundColor = [UIColor clearColor];
+            cell.selectionStyle = UITableViewCellSelectionStyleNone;
+            
+            UIView *btnView = [[UIView alloc] initWithFrame:CGRectZero];
+            btnView.tag = 777;
+            btnView.layer.cornerRadius = 14.0f;
+            btnView.layer.masksToBounds = YES;
+            
+            UIImageView *iconView = [[UIImageView alloc] initWithFrame:CGRectZero];
+            iconView.tag = 778;
+            iconView.contentMode = UIViewContentModeScaleAspectFit;
+            [btnView addSubview:iconView];
+            
+            UILabel *titleLbl = [[UILabel alloc] initWithFrame:CGRectZero];
+            titleLbl.tag = 779;
+            titleLbl.backgroundColor = [UIColor clearColor];
+            titleLbl.font = [UIFont boldSystemFontOfSize:14.0f];
+            titleLbl.shadowColor = [UIColor clearColor];
+            titleLbl.shadowOffset = CGSizeZero;
+            [btnView addSubview:titleLbl];
+            
+            [cell.contentView addSubview:btnView];
+        }
+        
+        UIView *btnView = [cell.contentView viewWithTag:777];
+        UIImageView *iconView = (UIImageView *)[btnView viewWithTag:778];
+        UILabel *titleLbl = (UILabel *)[btnView viewWithTag:779];
+        
+        CGFloat tableW = tableView.bounds.size.width;
+        CGFloat cellExpectedW = tableW - 20.0f;
+        CGFloat btnW = floorf(tableW * 0.70f);
+        CGFloat btnH = tableView.rowHeight > 0 ? tableView.rowHeight : 44.0f;
+        CGFloat btnX = floorf((cellExpectedW - btnW) / 2.0f);
+        
+        btnView.frame = CGRectMake(btnX, 0.0f, btnW, btnH);
+        
+        NSString *btnTitle = (type == HRDetailSectionPlay) ?
+        (([self.currentStreams count] > 0) ? @"Смотреть онлайн" : @"Загрузка потока...") :
+        @"Скачать / Плейлист M3U";
+        
+        CGSize titleSize = [btnTitle sizeWithFont:titleLbl.font];
+        CGSize iconSize = CGSizeMake(22.0f, 22.0f);
+        CGFloat spacing = 8.0f;
+        CGFloat contentW = iconSize.width + spacing + ceilf(titleSize.width);
+        CGFloat startX = floorf((btnW - contentW) / 2.0f);
+        if (startX < 6.0f) startX = 6.0f;
+        
+        iconView.frame = CGRectMake(startX, floorf((btnH - iconSize.height) / 2.0f), iconSize.width, iconSize.height);
+        titleLbl.frame = CGRectMake(startX + iconSize.width + spacing, 0.0f, btnW - startX - iconSize.width - spacing, btnH);
+        titleLbl.text = btnTitle;
+        
+        if (type == HRDetailSectionPlay) {
+            btnView.backgroundColor = [UIColor colorWithRed:0.449f green:0.030f blue:0.047f alpha:1.0f];
+            titleLbl.textColor = [UIColor whiteColor];
+            iconView.image = [self drawPlayIconWithColor:[UIColor whiteColor] size:iconSize];
+        } else {
+            btnView.backgroundColor = [UIColor colorWithRed:0.150f green:0.150f blue:0.161f alpha:1.0f];
+            titleLbl.textColor = [UIColor colorWithWhite:0.92f alpha:1.0f];
+            iconView.image = [self drawDownloadIconWithColor:[UIColor colorWithWhite:0.92f alpha:1.0f] size:iconSize];
+        }
+        
+        return cell;
     }
-    
-    return cell;
 }
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath
 {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
     
-    if (indexPath.section == 0) {
-        if (self.isSeriesMovie) {
-            if (indexPath.row == 0) [self showTranslatorSelector];
-            else if (indexPath.row == 1) [self showSeasonSelector];
-            else if (indexPath.row == 2) [self showEpisodeSelector];
-            else if (indexPath.row == 3) [self showQualitySelector];
-        } else {
-            if (indexPath.row == 0) [self showTranslatorSelector];
-            else if (indexPath.row == 1) [self showQualitySelector];
-        }
-    } else if (indexPath.section == 1) {
-        if (indexPath.row == 0) {
+    HRDetailSectionType type = [self sectionTypeForIndex:indexPath.section];
+    switch (type) {
+        case HRDetailSectionTranslator:
+            [self showTranslatorSelector];
+            break;
+        case HRDetailSectionSeason:
+            [self showSeasonSelector];
+            break;
+        case HRDetailSectionEpisode:
+            [self showEpisodeSelector];
+            break;
+        case HRDetailSectionQuality:
+            [self showQualitySelector];
+            break;
+        case HRDetailSectionPlay:
             [self playCurrentVideoInPlayer];
-        } else {
+            break;
+        case HRDetailSectionDownload:
             [self showExportMenu];
-        }
+            break;
     }
 }
 
-#pragma mark - Вызов чёрных кастомных меню
+#pragma mark - Вызовы списков выбора
 
-- (void)showDarkSelectionSheetWithTitle:(NSString *)title items:(NSArray *)items tag:(NSInteger)tag
+- (void)showSelectionSheetWithTitle:(NSString *)title items:(NSArray *)items tag:(NSInteger)tag
 {
-    HRDarkActionSheet *sheet = [[HRDarkActionSheet alloc] initWithTitle:title items:items delegate:self tag:tag];
+    HRSelectionSheet *sheet = [[HRSelectionSheet alloc] initWithTitle:title items:items delegate:self tag:tag];
     UIView *targetView = self.tabBarController.view ?: (self.navigationController.view ?: self.view);
     [sheet showInView:targetView];
 }
@@ -1012,7 +1048,7 @@ typedef NS_ENUM(NSInteger, HRActionSheetTag) {
     for (NSDictionary *t in self.translators) {
         [names addObject:[t objectForKey:@"name"]];
     }
-    [self showDarkSelectionSheetWithTitle:@"Озвучка" items:names tag:HRActionSheetTagTranslator];
+    [self showSelectionSheetWithTitle:@"Озвучка" items:names tag:HRActionSheetTagTranslator];
 }
 
 - (void)showSeasonSelector
@@ -1022,7 +1058,7 @@ typedef NS_ENUM(NSInteger, HRActionSheetTag) {
     for (NSDictionary *s in self.seasonsData) {
         [names addObject:[s objectForKey:@"title"]];
     }
-    [self showDarkSelectionSheetWithTitle:@"Сезон" items:names tag:HRActionSheetTagSeason];
+    [self showSelectionSheetWithTitle:@"Сезон" items:names tag:HRActionSheetTagSeason];
 }
 
 - (void)showEpisodeSelector
@@ -1033,44 +1069,31 @@ typedef NS_ENUM(NSInteger, HRActionSheetTag) {
     for (NSDictionary *ep in eps) {
         [names addObject:[ep objectForKey:@"name"]];
     }
-    [self showDarkSelectionSheetWithTitle:@"Серия" items:names tag:HRActionSheetTagEpisode];
+    [self showSelectionSheetWithTitle:@"Серия" items:names tag:HRActionSheetTagEpisode];
 }
 
 - (NSArray *)availableQualityKeys
 {
     NSMutableArray *qualities = [NSMutableArray array];
-    
     for (id key in [self.currentStreams allKeys]) {
-        if (![key isKindOfClass:[NSString class]]) {
-            continue;
-        }
-        
+        if (![key isKindOfClass:[NSString class]]) continue;
         NSString *quality = (NSString *)key;
         NSString *lower = [quality lowercaseString];
-        
-        // Не показываем ошибочное качество «1080p Ultra».
-        if ([lower rangeOfString:@"1080p"].location != NSNotFound &&
-            [lower rangeOfString:@"ultra"].location != NSNotFound) {
+        if ([lower rangeOfString:@"1080p"].location != NSNotFound && [lower rangeOfString:@"ultra"].location != NSNotFound) {
             continue;
         }
-        
         [qualities addObject:quality];
     }
     
-    // Сортируем один и тот же список одинаково для меню и обработки выбора.
-    // Наибольшее разрешение будет первым: 1080p, 720p, 480p, 360p.
     [qualities sortUsingComparator:^NSComparisonResult(id a, id b) {
         NSString *qualityA = (NSString *)a;
         NSString *qualityB = (NSString *)b;
         NSInteger valueA = [qualityA integerValue];
         NSInteger valueB = [qualityB integerValue];
-        
         if (valueA > valueB) return NSOrderedAscending;
         if (valueA < valueB) return NSOrderedDescending;
-        
         return [qualityA compare:qualityB options:NSCaseInsensitiveSearch];
     }];
-    
     return qualities;
 }
 
@@ -1078,15 +1101,35 @@ typedef NS_ENUM(NSInteger, HRActionSheetTag) {
 {
     NSArray *qualities = [self availableQualityKeys];
     if ([qualities count] == 0) return;
-    
-    [self showDarkSelectionSheetWithTitle:@"Качество"
-                                    items:qualities
-                                      tag:HRActionSheetTagQuality];
+    [self showSelectionSheetWithTitle:@"Качество" items:qualities tag:HRActionSheetTagQuality];
 }
 
-#pragma mark - HRDarkActionSheetDelegate (Обработка выбора)
+- (void)showExportMenu
+{
+    NSArray *exportItems = nil;
+    NSString *menuTitle = nil;
+    
+    if (self.isSeriesMovie && [self.seasonsData count] > 0) {
+        menuTitle = @"Действия с видео и плейлистами";
+        exportItems = @[
+                        @"Скачать текущую серию",
+                        @"Скачать весь сезон",
+                        @"Открыть плейлист серии в…",
+                        @"Открыть плейлист сезона в…"
+                        ];
+    } else {
+        menuTitle = @"Действия с фильмом";
+        exportItems = @[
+                        @"Скачать фильм",
+                        @"Открыть плейлист в…"
+                        ];
+    }
+    [self showSelectionSheetWithTitle:menuTitle items:exportItems tag:HRActionSheetTagExport];
+}
 
-- (void)darkActionSheet:(id)sheet didSelectIndex:(NSInteger)index withTag:(NSInteger)tag
+#pragma mark - HRSelectionSheetDelegate
+
+- (void)selectionSheet:(HRSelectionSheet *)sheet didSelectIndex:(NSInteger)index withTag:(NSInteger)tag
 {
     if (tag == HRActionSheetTagTranslator) {
         if (index >= 0 && index < [self.translators count]) {
@@ -1095,14 +1138,10 @@ typedef NS_ENUM(NSInteger, HRActionSheetTag) {
             if (newTranslatorId == self.selectedTranslatorId) return;
             
             self.selectedTranslatorId = newTranslatorId;
-            
-            /* Сезоны/серии принадлежат конкретной озвучке. Не используем
-             список и поток от предыдущего переводчика. */
             [self.seasonsData removeAllObjects];
-            self.selectedSeason = 0;
-            self.selectedEpisode = 0;
             self.currentStreams = nil;
             self.currentSubtitles = nil;
+            [self updatePadPlayButtonTitle];
             
             [self saveCurrentHistory];
             [self.tableView reloadData];
@@ -1139,46 +1178,9 @@ typedef NS_ENUM(NSInteger, HRActionSheetTag) {
             [self.tableView reloadData];
         }
     }
-}
-
-#pragma mark - Меню скачивания и M3U
-
-- (void)showExportMenu
-{
-    UIActionSheet *sheet = nil;
-    if (self.isSeriesMovie && [self.seasonsData count] > 0) {
-        sheet = [[UIActionSheet alloc] initWithTitle:@"Действия с видео и плейлистами"
-                                            delegate:self
-                                   cancelButtonTitle:@"Отмена"
-                              destructiveButtonTitle:nil
-                                   otherButtonTitles:@"Скачать текущую серию",
-                 @"Скачать весь сезон",
-                 @"Открыть плейлист серии в…",
-                 @"Открыть плейлист сезона в…", nil];
-    } else {
-        sheet = [[UIActionSheet alloc] initWithTitle:@"Действия с фильмом"
-                                            delegate:self
-                                   cancelButtonTitle:@"Отмена"
-                              destructiveButtonTitle:nil
-                                   otherButtonTitles:@"Скачать фильм",
-                 @"Открыть плейлист в…", nil];
-    }
-    sheet.tag = HRActionSheetTagExport;
-    
-    if (self.tabBarController.tabBar) {
-        [sheet showFromTabBar:self.tabBarController.tabBar];
-    } else {
-        [sheet showInView:self.view];
-    }
-}
-
-- (void)actionSheet:(UIActionSheet *)actionSheet clickedButtonAtIndex:(NSInteger)buttonIndex
-{
-    if (buttonIndex == actionSheet.cancelButtonIndex) return;
-    
-    if (actionSheet.tag == HRActionSheetTagExport) {
+    else if (tag == HRActionSheetTagExport) {
         if (self.isSeriesMovie && [self.seasonsData count] > 0) {
-            switch (buttonIndex) {
+            switch (index) {
                 case 0: [self downloadCurrentVideo]; break;
                 case 1: [self downloadEntireSeason]; break;
                 case 2: [self shareCurrentVideoM3U]; break;
@@ -1186,7 +1188,7 @@ typedef NS_ENUM(NSInteger, HRActionSheetTag) {
                 default: break;
             }
         } else {
-            switch (buttonIndex) {
+            switch (index) {
                 case 0: [self downloadCurrentVideo]; break;
                 case 1: [self shareCurrentVideoM3U]; break;
                 default: break;
@@ -1195,7 +1197,7 @@ typedef NS_ENUM(NSInteger, HRActionSheetTag) {
     }
 }
 
-#pragma mark - Воспроизведение и Загрузка
+#pragma mark - Воспроизведение, Загрузка и M3U
 
 - (void)playCurrentVideoInPlayer
 {
@@ -1206,18 +1208,26 @@ typedef NS_ENUM(NSInteger, HRActionSheetTag) {
         return;
     }
     
-    streamURL = [streamURL stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    streamURL = [streamURL stringByAddingPercentEscapesUsingEncoding:NSUTF8StringEncoding];
+    [self saveCurrentHistory];
     
-    NSURL *videoURL = [NSURL URLWithString:streamURL];
+    // Безопасное экранирование пробелов и кириллицы для iOS 6
+    NSString *cleanURL = [streamURL stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    cleanURL = [cleanURL stringByAddingPercentEscapesUsingEncoding:NSUTF8StringEncoding];
+    
+    NSURL *videoURL = [NSURL URLWithString:cleanURL];
     if (!videoURL) {
         [self showSimpleAlertTitle:@"Ошибка" message:@"Прямая ссылка имеет неверный формат."];
         return;
     }
     
     HRGestureMoviePlayerViewController *playerVC = [[HRGestureMoviePlayerViewController alloc] initWithContentURL:videoURL];
+    playerVC.movieTitle = self.isSeriesMovie ?
+    [NSString stringWithFormat:@"%@ — S%02ldE%02ld", self.movie.title, (long)self.selectedSeason, (long)self.selectedEpisode] :
+    (self.movie.title ?: @"Видео");
+    playerVC.delegate = self;
+    
     [playerVC.moviePlayer prepareToPlay];
-    [self presentMoviePlayerViewControllerAnimated:playerVC];
+    [self presentViewController:playerVC animated:YES completion:nil];
 }
 
 - (void)downloadCurrentVideo
@@ -1249,48 +1259,9 @@ typedef NS_ENUM(NSInteger, HRActionSheetTag) {
     }
     
     NSString *title = self.isSeriesMovie ? [NSString stringWithFormat:@"%@ - S%02ldE%02ld", self.movie.title, (long)self.selectedSeason, (long)self.selectedEpisode] : self.movie.title;
-    [[HRDownloadManager sharedManager] copySingleVideoToClipboardTitle:title urlString:streamURL];
+    [HRM3UExporter copySingleVideoToClipboardTitle:title urlString:streamURL];
     
     [self showSimpleAlertTitle:@"Скопировано" message:@"M3U-ссылка скопирована в буфер обмена."];
-}
-
-- (void)shareM3UContent:(NSString *)content suggestedName:(NSString *)name
-{
-    if (![content isKindOfClass:[NSString class]] || [content length] == 0) {
-        [self showSimpleAlertTitle:@"Ошибка" message:@"Плейлист пустой — нечего передавать."];
-        return;
-    }
-    
-    NSString *safeName = [name stringByReplacingOccurrencesOfString:@"/" withString:@"-"];
-    if ([safeName length] == 0) safeName = @"playlist";
-    if (![safeName hasSuffix:@".m3u"]) safeName = [safeName stringByAppendingString:@".m3u"];
-    
-    NSString *path = [NSTemporaryDirectory() stringByAppendingPathComponent:safeName];
-    NSError *error = nil;
-    if (![content writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:&error]) {
-        [self showSimpleAlertTitle:@"Ошибка" message:@"Не удалось создать файл плейлиста."];
-        return;
-    }
-    
-    NSURL *fileURL = [NSURL fileURLWithPath:path];
-    self.m3uDocumentInteractionController = [UIDocumentInteractionController interactionControllerWithURL:fileURL];
-    self.m3uDocumentInteractionController.delegate = self;
-    
-    // Показываем именно меню приложений, которые зарегистрировали поддержку открытия файлов.
-    // На iPad используем небольшую центральную область-якорь, а не весь экран.
-    // Это помогает избежать некорректного позиционирования popover-меню.
-    CGRect bounds = self.view.bounds;
-    CGRect anchorRect = CGRectMake(CGRectGetMidX(bounds),
-                                   CGRectGetMidY(bounds),
-                                   1.0,
-                                   1.0);
-    BOOL shown = [self.m3uDocumentInteractionController presentOpenInMenuFromRect:anchorRect
-                                                                           inView:self.view
-                                                                         animated:YES];
-    if (!shown) {
-        [self showSimpleAlertTitle:@"Нет подходящего приложения"
-                           message:@"iOS не нашла приложение, зарегистрированное для открытия файла M3U. Проверь, поддерживает ли установленный плеер импорт M3U-файлов через меню «Открыть в…». Файл плейлиста создан во временной папке приложения."];
-    }
 }
 
 - (void)shareCurrentVideoM3U
@@ -1302,8 +1273,17 @@ typedef NS_ENUM(NSInteger, HRActionSheetTag) {
     }
     
     NSString *title = self.isSeriesMovie ? [NSString stringWithFormat:@"%@ - S%02ldE%02ld", self.movie.title, (long)self.selectedSeason, (long)self.selectedEpisode] : (self.movie.title ?: @"Видео");
-    NSString *content = [NSString stringWithFormat:@"#EXTM3U\n#EXTINF:-1,%@\n%@\n", title, streamURL];
-    [self shareM3UContent:content suggestedName:title];
+    NSString *content = [HRM3UExporter playlistContentForSingleVideoTitle:title urlString:streamURL];
+    
+    UIView *targetView = (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad && self.padDownloadButton) ? self.padDownloadButton : self.view;
+    
+    __weak typeof(self) weakSelf = self;
+    [self.m3uExporter presentOpenInMenuWithContent:content
+                                     suggestedName:title
+                                            inView:targetView
+                                      errorHandler:^(NSString *errorTitle, NSString *errorMessage) {
+                                          [weakSelf showSimpleAlertTitle:errorTitle message:errorMessage];
+                                      }];
 }
 
 - (void)shareEntireSeasonM3U
@@ -1311,29 +1291,32 @@ typedef NS_ENUM(NSInteger, HRActionSheetTag) {
     [self.spinner startAnimating];
     NSArray *episodesList = [self episodesForSelectedSeason];
     
+    __weak typeof(self) weakSelf = self;
     [HRStreamResolver fetchSeasonEpisodeStreamsForMovieId:self.movie.movieId
                                              translatorId:self.selectedTranslatorId
                                                    season:self.selectedSeason
                                              episodesList:episodesList
                                          preferredQuality:self.selectedQuality
                                                completion:^(NSArray *resolvedEpisodes) {
-                                                   [self.spinner stopAnimating];
+                                                   [weakSelf.spinner stopAnimating];
                                                    if (![resolvedEpisodes count]) {
-                                                       [self showSimpleAlertTitle:@"Ошибка" message:@"Не удалось получить ссылки на серии сезона."];
+                                                       [weakSelf showSimpleAlertTitle:@"Ошибка" message:@"Не удалось получить ссылки на серии сезона."];
                                                        return;
                                                    }
                                                    
-                                                   NSMutableString *m3u = [NSMutableString stringWithString:@"#EXTM3U\n"];
-                                                   NSString *seasonTitle = [NSString stringWithFormat:@"Сезон %ld", (long)self.selectedSeason];
-                                                   for (NSDictionary *ep in resolvedEpisodes) {
-                                                       NSString *epName = [ep objectForKey:@"title"] ?: @"Серия";
-                                                       NSString *epURL = [ep objectForKey:@"url"] ?: @"";
-                                                       if ([epURL length] > 0) {
-                                                           [m3u appendFormat:@"#EXTINF:-1,%@ - %@ (%@)\n%@\n", self.movie.title ?: @"Видео", seasonTitle, epName, epURL];
-                                                       }
-                                                   }
-                                                   NSString *fileName = [NSString stringWithFormat:@"%@ - %@", self.movie.title ?: @"Видео", seasonTitle];
-                                                   [self shareM3UContent:m3u suggestedName:fileName];
+                                                   NSString *seasonTitle = [NSString stringWithFormat:@"Сезон %ld", (long)weakSelf.selectedSeason];
+                                                   NSString *m3u = [HRM3UExporter playlistContentForSeasonShowTitle:weakSelf.movie.title
+                                                                                                        seasonTitle:seasonTitle
+                                                                                                           episodes:resolvedEpisodes];
+                                                   NSString *fileName = [NSString stringWithFormat:@"%@ - %@", weakSelf.movie.title ?: @"Видео", seasonTitle];
+                                                   
+                                                   UIView *targetView = (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad && weakSelf.padDownloadButton) ? weakSelf.padDownloadButton : weakSelf.view;
+                                                   [self.m3uExporter presentOpenInMenuWithContent:m3u
+                                                                                    suggestedName:fileName
+                                                                                           inView:targetView
+                                                                                     errorHandler:^(NSString *errorTitle, NSString *errorMessage) {
+                                                                                         [weakSelf showSimpleAlertTitle:errorTitle message:errorMessage];
+                                                                                     }];
                                                }];
 }
 
@@ -1355,9 +1338,9 @@ typedef NS_ENUM(NSInteger, HRActionSheetTag) {
                                                    }
                                                    
                                                    NSString *seasonTitle = [NSString stringWithFormat:@"Сезон %ld", (long)self.selectedSeason];
-                                                   [[HRDownloadManager sharedManager] copySeasonPlaylistToClipboardTitle:self.movie.title
-                                                                                                             seasonTitle:seasonTitle
-                                                                                                                episodes:resolvedEpisodes];
+                                                   [HRM3UExporter copySeasonPlaylistToClipboardTitle:self.movie.title
+                                                                                         seasonTitle:seasonTitle
+                                                                                            episodes:resolvedEpisodes];
                                                    
                                                    NSString *msg = [NSString stringWithFormat:@"Плейлист сезона (%lu серий) скопирован в буфер обмена!", (unsigned long)[resolvedEpisodes count]];
                                                    [self showSimpleAlertTitle:@"M3U готов" message:msg];
@@ -1402,12 +1385,120 @@ typedef NS_ENUM(NSInteger, HRActionSheetTag) {
 
 - (void)showSimpleAlertTitle:(NSString *)title message:(NSString *)msg
 {
-    UIAlertView *alert = [[UIAlertView alloc] initWithTitle:title  
-                                                    message:msg  
-                                                   delegate:nil  
-                                          cancelButtonTitle:@"OK"  
-                                          otherButtonTitles:nil];  
-    [alert show];  
-}  
+    UIAlertView *alert = [[UIAlertView alloc] initWithTitle:title
+                                                    message:msg
+                                                   delegate:nil
+                                          cancelButtonTitle:@"OK"
+                                          otherButtonTitles:nil];
+    [alert show];
+}
 
-@end  
+#pragma mark - HRGestureMoviePlayerDelegate
+
+- (void)moviePlayerDidRequestNextTrack:(HRGestureMoviePlayerViewController *)player
+{
+    if (!self.isSeriesMovie) return;
+    [self switchToEpisodeOffset:1 inPlayer:player];
+}
+
+- (void)moviePlayerDidRequestPreviousTrack:(HRGestureMoviePlayerViewController *)player
+{
+    if (!self.isSeriesMovie) return;
+    [self switchToEpisodeOffset:-1 inPlayer:player];
+}
+
+- (void)switchToEpisodeOffset:(NSInteger)offset inPlayer:(HRGestureMoviePlayerViewController *)player
+{
+    NSArray *episodes = [self episodesForSelectedSeason];
+    if ([episodes count] == 0) return;
+    
+    NSInteger currentIndex = -1;
+    for (NSInteger i = 0; i < [episodes count]; i++) {
+        NSDictionary *ep = [episodes objectAtIndex:i];
+        if ([[ep objectForKey:@"id"] integerValue] == self.selectedEpisode) {
+            currentIndex = i;
+            break;
+        }
+    }
+    if (currentIndex == -1) return;
+    
+    NSInteger targetIndex = currentIndex + offset;
+    if (targetIndex >= 0 && targetIndex < [episodes count]) {
+        self.selectedEpisode = [[[episodes objectAtIndex:targetIndex] objectForKey:@"id"] integerValue];
+        [self loadAndPlayNewEpisodeInPlayer:player];
+    } else {
+        NSInteger currentSeasonIndex = -1;
+        for (NSInteger i = 0; i < [self.seasonsData count]; i++) {
+            NSDictionary *s = [self.seasonsData objectAtIndex:i];
+            if ([[s objectForKey:@"id"] integerValue] == self.selectedSeason) {
+                currentSeasonIndex = i;
+                break;
+            }
+        }
+        
+        if (currentSeasonIndex != -1) {
+            NSInteger targetSeasonIndex = currentSeasonIndex + offset;
+            if (targetSeasonIndex >= 0 && targetSeasonIndex < [self.seasonsData count]) {
+                NSDictionary *targetSeason = [self.seasonsData objectAtIndex:targetSeasonIndex];
+                self.selectedSeason = [[targetSeason objectForKey:@"id"] integerValue];
+                NSArray *targetEpisodes = [targetSeason objectForKey:@"episodes"];
+                if ([targetEpisodes count] > 0) {
+                    if (offset > 0) {
+                        self.selectedEpisode = [[[targetEpisodes objectAtIndex:0] objectForKey:@"id"] integerValue];
+                    } else {
+                        self.selectedEpisode = [[[targetEpisodes lastObject] objectForKey:@"id"] integerValue];
+                    }
+                    [self loadAndPlayNewEpisodeInPlayer:player];
+                }
+            }
+        }
+    }
+}
+
+- (void)loadAndPlayNewEpisodeInPlayer:(HRGestureMoviePlayerViewController *)player
+{
+    [self saveCurrentHistory];
+    [self.tableView reloadData];
+    
+    [player showLoadingIndicator];
+    
+    __weak typeof(self) weakSelf = self;
+    [HRStreamResolver fetchStreamsForMovieId:self.movie.movieId
+                                translatorId:self.selectedTranslatorId
+                                      season:self.selectedSeason
+                                     episode:self.selectedEpisode
+                                    isSeries:self.isSeriesMovie
+                                      action:@"get_stream"
+                                  completion:^(NSDictionary *streams, NSString *subtitles, NSArray *updatedSeasonsData, NSError *error) {
+                                      if (error) {
+                                          [player hideLoadingIndicator];
+                                          return;
+                                      }
+                                      
+                                      weakSelf.currentStreams = streams;
+                                      weakSelf.currentSubtitles = subtitles;
+                                      [weakSelf syncSelectedQualityWithAvailableStreams];
+                                      [weakSelf updatePadPlayButtonTitle];
+                                      
+                                      NSString *streamURL = [weakSelf bestStreamURLForCurrentSelection];
+                                      if (streamURL) {
+                                          // Безопасное экранирование пробелов и кириллицы
+                                          NSString *cleanURL = [streamURL stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+                                          cleanURL = [cleanURL stringByAddingPercentEscapesUsingEncoding:NSUTF8StringEncoding];
+                                          
+                                          NSURL *url = [NSURL URLWithString:cleanURL];
+                                          if (!url) {
+                                              [player hideLoadingIndicator];
+                                              [weakSelf showSimpleAlertTitle:@"Ошибка" message:@"Прямая ссылка имеет неверный формат."];
+                                              return;
+                                          }
+                                          
+                                          NSString *title = [NSString stringWithFormat:@"%@ — S%02ldE%02ld", weakSelf.movie.title, (long)weakSelf.selectedSeason, (long)weakSelf.selectedEpisode];
+                                          [player playNewVideoWithURL:url title:title];
+                                      } else {
+                                          [player hideLoadingIndicator];
+                                      }
+                                  }];
+}
+
+@end

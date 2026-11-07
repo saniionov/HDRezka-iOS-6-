@@ -4,8 +4,8 @@
 #import "HRMovieCell.h"
 #import "HRMovieDetailViewController.h"
 #import "HRImageCache.h"
+#import "HRTheme.h"
 #import <QuartzCore/QuartzCore.h>
-#import <sqlite3.h>
 
 @interface HRLocalListViewController ()
 @property (nonatomic, strong) UILabel *emptyLabel;
@@ -30,19 +30,9 @@
     self.view.backgroundColor = [UIColor colorWithRed:0.07 green:0.07 blue:0.07 alpha:1.0];
     
     if (self.mode == HRLocalListModeHistory) {
-        UIButton *clearBtn = [UIButton buttonWithType:UIButtonTypeCustom];
-        clearBtn.frame = CGRectMake(0, 0, 72, 30);
-        clearBtn.titleLabel.font = [UIFont boldSystemFontOfSize:12.0f];
-        [clearBtn setTitle:@"Очистить" forState:UIControlStateNormal];
-        [clearBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-        clearBtn.backgroundColor = [UIColor colorWithRed:0.62 green:0.08 blue:0.08 alpha:1.0];
-        clearBtn.layer.cornerRadius = 4.0f;
-        clearBtn.layer.borderWidth = 1.0f;
-        clearBtn.layer.borderColor = [[UIColor colorWithRed:0.85 green:0.20 blue:0.20 alpha:1.0] CGColor];
-        clearBtn.layer.masksToBounds = YES;
-        [clearBtn addTarget:self action:@selector(clearHistoryTapped) forControlEvents:UIControlEventTouchUpInside];
-        
-        self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:clearBtn];
+        self.navigationItem.rightBarButtonItem = [HRTheme createGlossyBarButtonWithTitle:@"Очистить"
+                                                                                  target:self
+                                                                                  action:@selector(clearHistoryTapped)];
     }
     
     self.tableView = [[UITableView alloc] initWithFrame:self.view.bounds style:UITableViewStylePlain];
@@ -51,12 +41,12 @@
     self.tableView.dataSource = self;
     self.tableView.delegate = self;
     self.tableView.backgroundColor = [UIColor colorWithRed:0.07 green:0.07 blue:0.07 alpha:1.0];
-    
-    // КРАСНАЯ ЛИНИЯ РАЗДЕЛЕНИЯ В ИСТОРИИ И ИЗБРАННОМ
-    self.tableView.separatorColor = [UIColor colorWithRed:0.55 green:0.10 blue:0.10 alpha:0.50];
+    // Серая линия вместо красной, в едином стиле с главным каталогом
+    self.tableView.separatorColor = [UIColor colorWithWhite:0.25f alpha:1.0f];
     [self.view addSubview:self.tableView];
     
     self.emptyLabel = [[UILabel alloc] initWithFrame:CGRectMake(20, 160, self.view.bounds.size.width - 40, 60)];
+    self.emptyLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
     self.emptyLabel.numberOfLines = 2;
     self.emptyLabel.textAlignment = NSTextAlignmentCenter;
     self.emptyLabel.textColor = [UIColor colorWithWhite:0.5f alpha:1.0f];
@@ -101,16 +91,7 @@
 - (void)alertView:(UIAlertView *)alertView clickedButtonAtIndex:(NSInteger)buttonIndex
 {
     if (buttonIndex == 1) {
-        sqlite3 *db = NULL;
-        NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
-        NSString *docsDir = ([paths count] > 0) ? [paths objectAtIndex:0] : nil;
-        NSString *dbPath = [docsDir stringByAppendingPathComponent:@"hdrezka_storage.sqlite"];
-        
-        if (sqlite3_open([dbPath UTF8String], &db) == SQLITE_OK) {
-            sqlite3_exec(db, "DELETE FROM history;", NULL, NULL, NULL);
-            sqlite3_close(db);
-        }
-        
+        [[HRDatabase sharedDatabase] clearHistory];
         [self reloadDataFromDatabase];
     }
 }
@@ -136,10 +117,22 @@
     if (self.mode == HRLocalListModeHistory && movie.rating && [movie.rating rangeOfString:@"|"].location != NSNotFound) {
         NSArray *parts = [movie.rating componentsSeparatedByString:@"|"];
         if ([parts count] >= 2) {
-            cell.subtitleLabel.text = [NSString stringWithFormat:@"S%@ | E%@", [parts objectAtIndex:0], [parts objectAtIndex:1]];
-            cell.badgeSeriesLabel.hidden = NO;
-            cell.badgeSeriesLabel.text = [NSString stringWithFormat:@"E%@", [parts objectAtIndex:1]];
+            NSInteger s = [[parts objectAtIndex:0] integerValue];
+            NSInteger e = [[parts objectAtIndex:1] integerValue];
+            
+            if (s > 0 && e > 0) {
+                cell.subtitleLabel.text = [NSString stringWithFormat:@"Сезон %ld, Серия %ld", (long)s, (long)e];
+                cell.badgeSeriesLabel.hidden = NO;
+                cell.badgeSeriesLabel.text = [NSString stringWithFormat:@"E%ld", (long)e];
+            } else {
+                cell.badgeSeriesLabel.hidden = YES;
+                if (movie.info && [movie.info length] > 0) {
+                    cell.subtitleLabel.text = movie.info;
+                }
+            }
         }
+    } else {
+        cell.badgeSeriesLabel.hidden = YES;
     }
     
     cell.posterImageView.image = nil;

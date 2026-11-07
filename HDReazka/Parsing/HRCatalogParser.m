@@ -9,6 +9,7 @@
     NSMutableArray *results = [NSMutableArray array];
     if (!html || [html length] == 0) return results;
     
+    // Разбиваем по карточкам элементов
     NSArray *items = [html componentsSeparatedByString:@"class=\"b-content__inline_item\""];
     for (NSUInteger i = 1; i < [items count]; i++) {
         NSString *chunk = [items objectAtIndex:i];
@@ -54,9 +55,30 @@
             movie.title = [titleChunk stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
         }
         
-        // 4. Метаданные (год, страна, жанры) с удалением «Дубляж» и сущностей
+        // 4. Год, Страна, Жанр (Метаданные)
         NSString *infoChunk = [self extractBetween:@"<div>" and:@"</div>" from:chunk];
-        if (infoChunk && [infoChunk length] > 0) {
+        
+        BOOL hasNoYear = ([infoChunk rangeOfString:@"19"].location == NSNotFound && [infoChunk rangeOfString:@"20"].location == NSNotFound);
+        
+        if ([infoChunk length] == 0 || hasNoYear) {
+            infoChunk = [self extractBetween:@"class=\"misc\">" and:@"</div>" from:chunk];
+            hasNoYear = ([infoChunk rangeOfString:@"19"].location == NSNotFound && [infoChunk rangeOfString:@"20"].location == NSNotFound);
+        }
+        
+        // СТРОГАЯ ЗАЩИТА ОТ МУСОРА
+        // Ищет текст строго между тегами >...<, который НАЧИНАЕТСЯ с 19xx или 20xx.
+        // Исключает захват дат из URL или путей к картинкам.
+        if ([infoChunk length] == 0 || hasNoYear) {
+            NSRegularExpression *metaRegex = [NSRegularExpression regularExpressionWithPattern:@">\\s*((?:19|20)\\d\\d[^<]+)<" options:0 error:nil];
+            NSTextCheckingResult *match = [metaRegex firstMatchInString:chunk options:0 range:NSMakeRange(0, [chunk length])];
+            if (match) {
+                infoChunk = [chunk substringWithRange:[match rangeAtIndex:1]];
+            } else {
+                infoChunk = @"";
+            }
+        }
+        
+        if ([infoChunk length] > 0) {
             NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:@"<[^>]+>" options:0 error:nil];
             infoChunk = [regex stringByReplacingMatchesInString:infoChunk options:0 range:NSMakeRange(0, [infoChunk length]) withTemplate:@""];
             infoChunk = [self cleanHtmlEntities:infoChunk];
@@ -70,7 +92,7 @@
         }
         movie.rating = [ratingChunk stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
         
-        // Признак сериала
+        // 6. Определение сериала
         movie.isSeries = ([chunk rangeOfString:@"b-content__inline_item-cover--series"].location != NSNotFound ||
                           [movie.detailURLString rangeOfString:@"/series/"].location != NSNotFound);
         
@@ -92,8 +114,8 @@
     cleaned = [cleaned stringByReplacingOccurrencesOfString:@"&quot;" withString:@"\""];
     cleaned = [cleaned stringByReplacingOccurrencesOfString:@"&#39;" withString:@"'"];
     
-    // Удаление слова «Дубляж»
-    NSRegularExpression *dubRegex = [NSRegularExpression regularExpressionWithPattern:@"(?i)\\bдубляж\\b[\\s,:—\\-]*"
+    // Удаляем слово Дубляж
+    NSRegularExpression *dubRegex = [NSRegularExpression regularExpressionWithPattern:@"(?i)\\bдубляж\\b[\\s,:\\-\\—]*"
                                                                               options:0
                                                                                 error:nil];
     cleaned = [dubRegex stringByReplacingMatchesInString:cleaned

@@ -36,7 +36,7 @@ static NSString * const HRWelcomeDidReadKey = @"HR_WELCOME_DID_READ_V1";
     
     UILabel *title = [[UILabel alloc] initWithFrame:CGRectZero];
     title.backgroundColor = [UIColor clearColor];
-    title.text = @"HDREZKA";
+    title.text = self.displayTitle ?: @"HDREZKA";
     title.textColor = [UIColor whiteColor];
     title.font = [UIFont boldSystemFontOfSize:22.0];
     [self.view addSubview:title];
@@ -44,7 +44,7 @@ static NSString * const HRWelcomeDidReadKey = @"HR_WELCOME_DID_READ_V1";
     
     UILabel *subtitle = [[UILabel alloc] initWithFrame:CGRectZero];
     subtitle.backgroundColor = [UIColor clearColor];
-    subtitle.text = @"ВОЗМОЖНОСТИ И НАСТРОЙКА";
+    subtitle.text = self.displaySubtitle ?: @"ВОЗМОЖНОСТИ И НАСТРОЙКА";
     subtitle.textColor = [UIColor colorWithRed:0.96 green:0.24 blue:0.27 alpha:1.0];
     subtitle.font = [UIFont boldSystemFontOfSize:10.0];
     subtitle.adjustsFontSizeToFitWidth = YES;
@@ -63,13 +63,18 @@ static NSString * const HRWelcomeDidReadKey = @"HR_WELCOME_DID_READ_V1";
     textView.editable = NO;
     textView.delegate = self;
     textView.scrollEnabled = YES;
+    textView.alwaysBounceVertical = YES;
+    textView.alwaysBounceHorizontal = NO;
+    textView.showsHorizontalScrollIndicator = NO;
+    textView.showsVerticalScrollIndicator = YES;
     textView.indicatorStyle = UIScrollViewIndicatorStyleWhite;
     textView.dataDetectorTypes = UIDataDetectorTypeLink;
     textView.layer.cornerRadius = 8.0;
     textView.layer.borderWidth = 1.0;
     textView.layer.borderColor = [[UIColor colorWithWhite:0.20 alpha:1.0] CGColor];
     textView.clipsToBounds = YES;
-    textView.contentInset = UIEdgeInsetsMake(12.0, 9.0, 12.0, 9.0);
+    // Убираем боковой отступ, оставляя только верхний и нижний
+    textView.contentInset = UIEdgeInsetsMake(12.0, 0.0, 12.0, 0.0);
     [self.view addSubview:textView];
     self.welcomeTextView = textView;
     
@@ -96,13 +101,14 @@ static NSString * const HRWelcomeDidReadKey = @"HR_WELCOME_DID_READ_V1";
     [self.view addSubview:button];
     self.continueButton = button;
     
-    NSString *path = [[NSBundle mainBundle] pathForResource:@"WelcomeText" ofType:@"txt"];
+    NSString *fileName = self.textFileName ?: @"WelcomeText";
+    NSString *path = [[NSBundle mainBundle] pathForResource:fileName ofType:@"txt"];
     NSString *text = nil;
     if (path != nil) {
         text = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
     }
     if ([text length] == 0) {
-        text = @"Не удалось загрузить WelcomeText.txt.\n\nДобавьте файл в ресурсы приложения через Xcode и убедитесь, что он включён в Target Membership.";
+        text = [NSString stringWithFormat:@"Не удалось загрузить %@.txt.\n\nДобавьте файл в ресурсы приложения через Xcode и убедитесь, что он включён в Target Membership.", fileName];
     }
     textView.attributedText = [self styledWelcomeText:text];
 }
@@ -182,7 +188,15 @@ static NSString * const HRWelcomeDidReadKey = @"HR_WELCOME_DID_READ_V1";
 
 - (void)scrollViewDidScroll:(UIScrollView *)scrollView
 {
-    if (scrollView == self.welcomeTextView) [self updateContinueAvailability];
+    if (scrollView == self.welcomeTextView) {
+        // Блокируем горизонтальный люфт
+        if (scrollView.contentOffset.x != 0.0f) {
+            CGPoint offset = scrollView.contentOffset;
+            offset.x = 0.0f;
+            scrollView.contentOffset = offset;
+        }
+        [self updateContinueAvailability];
+    }
 }
 
 - (void)updateContinueAvailability
@@ -223,6 +237,5 @@ static NSString * const HRWelcomeDidReadKey = @"HR_WELCOME_DID_READ_V1";
 {
     return orientation == UIInterfaceOrientationPortrait;
 }
-
 
 @end

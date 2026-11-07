@@ -13,26 +13,26 @@
 
 typedef enum {
     HRCatalogCategoryPopular = 0,
-    HRCatalogCategoryFilms   = 1,
-    HRCatalogCategorySeries  = 2
+    HRCatalogCategoryFilms = 1,
+    HRCatalogCategorySeries = 2
 } HRCatalogCategory;
-
-// Состояния индикатора кнопки загрузок
-typedef enum {
-    HRDownloadNavStateIdle        = 0, // Серый (нет активных закачек и ошибок)
-    HRDownloadNavStateDownloading = 1, // Зелёный (идёт скачивание)
-    HRDownloadNavStateFailed      = 2  // Красный (ошибка скачивания)
-} HRDownloadNavState;
 
 @interface HRCatalogViewController ()
 @property (nonatomic, assign) BOOL isSearching;
-@property (nonatomic, assign) HRDownloadNavState lastKnownDownloadState;
+@property (nonatomic, assign) HRDownloadIndicatorState lastKnownDownloadState;
 
 @property (nonatomic, assign) HRCatalogCategory currentCategory;
 @property (nonatomic, strong) UIButton *popularButton;
 @property (nonatomic, strong) UIButton *filmsButton;
 @property (nonatomic, strong) UIButton *seriesButton;
 @property (nonatomic, strong) UIButton *downloadNavButton;
+
+@property (nonatomic, strong) UIView *headerContainer;
+@property (nonatomic, strong) UIView *categoriesBar;
+
+- (UIButton *)createCategoryButtonWithTitle:(NSString *)title cornerRadius:(CGFloat)cornerRadius tag:(NSInteger)tag;
+- (void)layoutGlossLayerForButton:(UIButton *)btn;
+- (void)updateCategoryButtonsStyle;
 @end
 
 @implementation HRCatalogViewController
@@ -42,103 +42,42 @@ typedef enum {
     [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
-#pragma mark - Генерация цветной иконки загрузок (Серый / Зелёный / Красный)
-
-- (UIImage *)createDownloadBarButtonIconWithColor:(UIColor *)iconColor
-{
-    UIGraphicsBeginImageContextWithOptions(CGSizeMake(20.0f, 20.0f), NO, 0.0f);
-    
-    [iconColor setFill];
-    [iconColor setStroke];
-    
-    // Стрелка вниз
-    UIBezierPath *arrowPath = [UIBezierPath bezierPath];
-    [arrowPath moveToPoint:CGPointMake(10.0f, 13.0f)];
-    [arrowPath addLineToPoint:CGPointMake(5.0f, 8.0f)];
-    [arrowPath addLineToPoint:CGPointMake(8.0f, 8.0f)];
-    [arrowPath addLineToPoint:CGPointMake(8.0f, 1.0f)];
-    [arrowPath addLineToPoint:CGPointMake(12.0f, 1.0f)];
-    [arrowPath addLineToPoint:CGPointMake(12.0f, 8.0f)];
-    [arrowPath addLineToPoint:CGPointMake(15.0f, 8.0f)];
-    [arrowPath closePath];
-    [arrowPath fill];
-    
-    // Лоток под стрелкой
-    UIBezierPath *trayPath = [UIBezierPath bezierPath];
-    [trayPath moveToPoint:CGPointMake(3.0f, 11.0f)];
-    [trayPath addLineToPoint:CGPointMake(3.0f, 17.0f)];
-    [trayPath addLineToPoint:CGPointMake(17.0f, 17.0f)];
-    [trayPath addLineToPoint:CGPointMake(17.0f, 11.0f)];
-    trayPath.lineWidth = 2.0f;
-    trayPath.lineCapStyle = kCGLineCapRound;
-    trayPath.lineJoinStyle = kCGLineJoinRound;
-    [trayPath stroke];
-    
-    UIImage *icon = UIGraphicsGetImageFromCurrentImageContext();
-    UIGraphicsEndImageContext();
-    return icon;
-}
-
-- (HRDownloadNavState)calculateCurrentDownloadState
-{
-    BOOL isDownloading = NO;
-    BOOL hasFailed = NO;
-    
-    for (HRDownloadTask *task in [HRDownloadManager sharedManager].tasks) {
-        if (task.status == HRDownloadStatusDownloading) {
-            isDownloading = YES;
-        } else if (task.status == HRDownloadStatusFailed) {
-            hasFailed = YES;
-        }
-    }
-    
-    if (isDownloading) {
-        return HRDownloadNavStateDownloading;
-    }
-    if (hasFailed) {
-        return HRDownloadNavStateFailed;
-    }
-    return HRDownloadNavStateIdle;
-}
+#pragma mark - Кнопка и индикатор загрузок
 
 - (void)setupDownloadNavButton
 {
-    self.downloadNavButton = [UIButton buttonWithType:UIButtonTypeCustom];
-    self.downloadNavButton.frame = CGRectMake(0, 0, 36, 30);
-    self.downloadNavButton.backgroundColor = [UIColor colorWithRed:0.15f green:0.15f blue:0.15f alpha:1.0f];
-    self.downloadNavButton.layer.cornerRadius = 5.0f;
-    self.downloadNavButton.layer.borderWidth = 1.0f;
-    [self.downloadNavButton addTarget:self action:@selector(downloadsButtonTapped) forControlEvents:UIControlEventTouchUpInside];
-    
+    self.downloadNavButton = [HRTheme createDownloadNavButtonWithTarget:self
+                                                                 action:@selector(downloadsButtonTapped)];
     self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:self.downloadNavButton];
     [self forceRefreshDownloadButtonColor];
 }
 
 - (void)forceRefreshDownloadButtonColor
 {
-    HRDownloadNavState currentState = [self calculateCurrentDownloadState];
-    self.lastKnownDownloadState = currentState;
-    
-    UIColor *targetColor = nil;
-    if (currentState == HRDownloadNavStateDownloading) {
-        // Зелёный — идёт закачка
-        targetColor = [UIColor colorWithRed:0.20f green:0.85f blue:0.25f alpha:1.0f];
-    } else if (currentState == HRDownloadNavStateFailed) {
-        // Красный — ошибка закачки
-        targetColor = [UIColor colorWithRed:0.90f green:0.20f blue:0.20f alpha:1.0f];
-    } else {
-        // Серый — закачек нет (или завершены / на паузе)
-        targetColor = [UIColor colorWithWhite:0.62f alpha:1.0f];
-    }
-    
-    UIImage *coloredIcon = [self createDownloadBarButtonIconWithColor:targetColor];
-    [self.downloadNavButton setImage:coloredIcon forState:UIControlStateNormal];
-    self.downloadNavButton.layer.borderColor = [targetColor colorWithAlphaComponent:0.55f].CGColor;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        HRDownloadIndicatorState currentState = [HRDownloadManager sharedManager].indicatorState;
+        self.lastKnownDownloadState = currentState;
+        
+        UIColor *targetColor = nil;
+        if (currentState == HRDownloadIndicatorStateDownloading) {
+            targetColor = [UIColor colorWithRed:0.20f green:0.88f blue:0.30f alpha:1.0f];
+        } else if (currentState == HRDownloadIndicatorStateFailed) {
+            targetColor = [UIColor colorWithRed:0.95f green:0.15f blue:0.15f alpha:1.0f];
+        } else {
+            targetColor = [UIColor colorWithWhite:0.65f alpha:1.0f];
+        }
+        
+        UIImage *coloredIcon = [HRTheme createDownloadBarButtonIconWithColor:targetColor];
+        [self.downloadNavButton setImage:coloredIcon forState:UIControlStateNormal];
+        
+        self.downloadNavButton.layer.borderWidth = 0.0f;
+        self.downloadNavButton.layer.borderColor = [UIColor clearColor].CGColor;
+    });
 }
 
 - (void)updateDownloadButtonIndicatorIfNeeded
 {
-    HRDownloadNavState currentState = [self calculateCurrentDownloadState];
+    HRDownloadIndicatorState currentState = [HRDownloadManager sharedManager].indicatorState;
     if (currentState != self.lastKnownDownloadState) {
         [self forceRefreshDownloadButtonColor];
     }
@@ -168,70 +107,54 @@ typedef enum {
     self.movies = [NSMutableArray array];
     self.currentCategory = HRCatalogCategoryPopular;
     
-    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
-    NSString *savedDomain = [defaults stringForKey:@"HR_MIRROR_DOMAIN"];
-    if (savedDomain && [savedDomain length] > 0) {
-        [HRHTTPClient sharedClient].baseURLString = savedDomain;
-    }
-    
-    // 1. Шапка: Поиск + Категории
+    BOOL isPad = (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad);
+    CGFloat searchH = isPad ? 58.0f : 50.0f;
+    CGFloat catH = isPad ? 56.0f : 48.0f;
+    CGFloat headerH = searchH + catH;
     CGFloat screenW = self.view.bounds.size.width;
-    UIView *headerContainer = [[UIView alloc] initWithFrame:CGRectMake(0, 0, screenW, 102)];
-    headerContainer.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-    headerContainer.backgroundColor = [UIColor colorWithRed:0.07 green:0.07 blue:0.07 alpha:1.0];
     
-    self.searchBar = [[UISearchBar alloc] initWithFrame:CGRectMake(0, 0, screenW, 52)];
+    // Монолитная темная шапка
+    self.headerContainer = [[UIView alloc] initWithFrame:CGRectMake(0, 0, screenW, headerH)];
+    self.headerContainer.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    self.headerContainer.backgroundColor = [UIColor colorWithRed:0.10f green:0.10f blue:0.11f alpha:1.0f];
+    
+    self.searchBar = [[UISearchBar alloc] initWithFrame:CGRectMake(0, 0, screenW, searchH)];
     self.searchBar.autoresizingMask = UIViewAutoresizingFlexibleWidth;
     self.searchBar.delegate = self;
     self.searchBar.placeholder = @"Поиск фильмов и сериалов";
     self.searchBar.barStyle = UIBarStyleBlackOpaque;
+    self.searchBar.backgroundColor = [UIColor clearColor];
     
-    for (UIView *subview in self.searchBar.subviews) {
-        if ([subview isKindOfClass:NSClassFromString(@"UISearchBarBackground")]) {
-            subview.alpha = 0.0f;
-        }
-        if ([subview isKindOfClass:[UITextField class]]) {
-            UITextField *searchField = (UITextField *)subview;
-            searchField.background = nil;
-            searchField.disabledBackground = nil;
-            searchField.borderStyle = UITextBorderStyleNone;
-            searchField.textColor = [UIColor whiteColor];
-            searchField.backgroundColor = [UIColor colorWithRed:0.16 green:0.16 blue:0.16 alpha:1.0];
-            searchField.layer.borderColor = [[UIColor colorWithRed:0.55 green:0.10 blue:0.10 alpha:0.80] CGColor];
-            searchField.layer.borderWidth = 1.0f;
-            searchField.layer.cornerRadius = 6.0f;
-            searchField.layer.masksToBounds = YES;
-            [searchField setValue:[UIColor colorWithWhite:0.55f alpha:1.0f] forKeyPath:@"_placeholderLabel.textColor"];
-        }
-    }
-    [headerContainer addSubview:self.searchBar];
+    [self applyCleanSearchBarStyle];
+    [self.headerContainer addSubview:self.searchBar];
     
-    // 2. Блок кнопок категорий
-    UIView *categoriesBar = [[UIView alloc] initWithFrame:CGRectMake(0, 56, screenW, 46)];
-    categoriesBar.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-    categoriesBar.backgroundColor = [UIColor colorWithRed:0.09 green:0.09 blue:0.09 alpha:1.0];
+    // Блок кнопок категорий
+    self.categoriesBar = [[UIView alloc] initWithFrame:CGRectMake(0, searchH, screenW, catH)];
+    self.categoriesBar.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    self.categoriesBar.backgroundColor = [UIColor clearColor];
     
-    CGFloat btnW = (screenW - 32.0f) / 3.0f;
-    self.popularButton = [self createCategoryButtonWithTitle:@"Популярное" frame:CGRectMake(8, 6, btnW, 32) tag:0];
-    self.filmsButton   = [self createCategoryButtonWithTitle:@"Фильмы"     frame:CGRectMake(16 + btnW, 6, btnW, 32) tag:1];
-    self.seriesButton  = [self createCategoryButtonWithTitle:@"Сериалы"    frame:CGRectMake(24 + btnW * 2, 6, btnW, 32) tag:2];
+    CGFloat btnCornerR = isPad ? 11.0f : 8.0f;
+    self.popularButton = [self createCategoryButtonWithTitle:@"Популярное" cornerRadius:btnCornerR tag:0];
+    self.filmsButton = [self createCategoryButtonWithTitle:@"Фильмы" cornerRadius:btnCornerR tag:1];
+    self.seriesButton = [self createCategoryButtonWithTitle:@"Сериалы" cornerRadius:btnCornerR tag:2];
     
-    [categoriesBar addSubview:self.popularButton];
-    [categoriesBar addSubview:self.filmsButton];
-    [categoriesBar addSubview:self.seriesButton];
-    [headerContainer addSubview:categoriesBar];
+    [self.categoriesBar addSubview:self.popularButton];
+    [self.categoriesBar addSubview:self.filmsButton];
+    [self.categoriesBar addSubview:self.seriesButton];
+    [self.headerContainer addSubview:self.categoriesBar];
     
     [self updateCategoryButtonsStyle];
     
-    // 3. Таблица каталога
+    // Таблица каталога
     self.tableView = [[UITableView alloc] initWithFrame:self.view.bounds style:UITableViewStylePlain];
     self.tableView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    self.tableView.rowHeight = (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) ? 150.0f : 96.0f;
+    self.tableView.rowHeight = isPad ? 150.0f : 96.0f;
     self.tableView.dataSource = self;
     self.tableView.delegate = self;
-    self.tableView.tableHeaderView = headerContainer;
+    self.tableView.tableHeaderView = self.headerContainer;
     self.tableView.backgroundColor = [UIColor colorWithRed:0.07 green:0.07 blue:0.07 alpha:1.0];
-    self.tableView.separatorColor = [UIColor colorWithRed:0.55 green:0.10 blue:0.10 alpha:0.50];
+    // Серая линия вместо красной
+    self.tableView.separatorColor = [UIColor colorWithWhite:0.25f alpha:1.0f];
     [self.view addSubview:self.tableView];
     
     self.loadingIndicator = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleWhite];
@@ -251,35 +174,111 @@ typedef enum {
     [self startLoadingProcess];
 }
 
+- (void)applyCleanSearchBarStyle
+{
+    BOOL isPad = (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad);
+    CGFloat cornerR = isPad ? 8.0f : 6.0f;
+    
+    for (UIView *subview in self.searchBar.subviews) {
+        if ([subview isKindOfClass:NSClassFromString(@"UISearchBarBackground")]) {
+            subview.alpha = 0.0f;
+        }
+        if ([subview isKindOfClass:[UITextField class]]) {
+            UITextField *searchField = (UITextField *)subview;
+            searchField.background = nil;
+            searchField.disabledBackground = nil;
+            searchField.borderStyle = UITextBorderStyleNone;
+            searchField.textColor = [UIColor whiteColor];
+            searchField.font = [UIFont systemFontOfSize:isPad ? 16.0f : 14.0f];
+            
+            searchField.backgroundColor = [UIColor colorWithRed:0.153f green:0.153f blue:0.162f alpha:1.0f];
+            
+            searchField.layer.borderWidth = 0.0f;
+            searchField.layer.borderColor = [UIColor clearColor].CGColor;
+            searchField.layer.cornerRadius = cornerR;
+            searchField.layer.masksToBounds = YES;
+            
+            [searchField setValue:[UIColor colorWithWhite:0.65f alpha:1.0f] forKeyPath:@"_placeholderLabel.textColor"];
+        }
+    }
+}
+
 - (void)viewWillAppear:(BOOL)animated
 {
     [super viewWillAppear:animated];
     [self forceRefreshDownloadButtonColor];
 }
 
-// Автоматическое обновление ширины хедера и кнопок при повороте экрана iPad/iPhone
 - (void)viewWillLayoutSubviews
 {
     [super viewWillLayoutSubviews];
     
     CGFloat screenW = self.view.bounds.size.width;
-    UIView *header = self.tableView.tableHeaderView;
-    if (header) {
-        CGRect hFrame = header.frame;
-        hFrame.size.width = screenW;
-        header.frame = hFrame;
-        self.tableView.tableHeaderView = header;
+    BOOL isPad = (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad);
+    
+    CGFloat searchH = isPad ? 58.0f : 50.0f;
+    CGFloat padOffset = isPad ? 20.0f : 10.0f;
+    CGFloat spacing = isPad ? 10.0f : 7.0f;
+    CGFloat btnH = isPad ? 38.0f : 32.0f;
+    CGFloat posterTopInCell = isPad ? 12.0f : 8.0f;
+    
+    CGFloat visibleSearchBottom = 0.0f;
+    for (UIView *subview in self.searchBar.subviews) {
+        if ([subview isKindOfClass:[UITextField class]]) {
+            visibleSearchBottom = CGRectGetMaxY(subview.frame);
+            break;
+        }
+    }
+    if (visibleSearchBottom <= 0.0f) {
+        visibleSearchBottom = isPad ? 44.0f : 39.0f;
     }
     
-    BOOL isPad = (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad);
-    CGFloat btnH = isPad ? 40.0f : 32.0f;
-    CGFloat btnW = (screenW - 32.0f) / 3.0f;
+    CGFloat searchBarBottomSpace = searchH - visibleSearchBottom;
+    CGFloat bottomExtraGap = 8.0f;
+    CGFloat catH = searchBarBottomSpace + posterTopInCell + btnH + bottomExtraGap;
+    CGFloat totalH = searchH + catH;
     
-    self.popularButton.frame = CGRectMake(8, 6, btnW, btnH);
-    self.filmsButton.frame   = CGRectMake(16 + btnW, 6, btnW, btnH);
-    self.seriesButton.frame  = CGRectMake(24 + btnW * 2, 6, btnW, btnH);
+    if (self.headerContainer) {
+        self.headerContainer.frame = CGRectMake(0, 0, screenW, totalH);
+        self.searchBar.frame = CGRectMake(0, 0, screenW, searchH);
+        self.categoriesBar.frame = CGRectMake(0, searchH, screenW, catH);
+        self.tableView.tableHeaderView = self.headerContainer;
+    }
+    
+    CGFloat btnY = floorf((searchBarBottomSpace + posterTopInCell) / 2.0f);
+    
+    CGFloat totalAvailableW = screenW - (padOffset * 2.0f);
+    CGFloat btnW = floorf((totalAvailableW - (spacing * 2.0f)) / 3.0f);
+    
+    CGFloat x0 = floorf(padOffset);
+    CGFloat x1 = floorf(padOffset + btnW + spacing);
+    CGFloat x2 = floorf(screenW - padOffset - btnW);
+    
+    self.popularButton.frame = CGRectIntegral(CGRectMake(x0, btnY, btnW, btnH));
+    self.filmsButton.frame = CGRectIntegral(CGRectMake(x1, btnY, btnW, btnH));
+    self.seriesButton.frame = CGRectIntegral(CGRectMake(x2, btnY, btnW, btnH));
+    
+    [self layoutGlossLayerForButton:self.popularButton];
+    [self layoutGlossLayerForButton:self.filmsButton];
+    [self layoutGlossLayerForButton:self.seriesButton];
     
     self.loadingIndicator.center = CGPointMake(screenW / 2.0f, self.view.bounds.size.height / 2.0f);
+}
+
+- (void)layoutGlossLayerForButton:(UIButton *)btn
+{
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    CGFloat h = btn.bounds.size.height;
+    CGFloat w = btn.bounds.size.width;
+    
+    for (CALayer *layer in btn.layer.sublayers) {
+        if ([layer.name isEqualToString:@"CategorySubtleGloss"]) {
+            layer.frame = CGRectMake(0.0f, 0.0f, w, h);
+            break;
+        }
+    }
+    [CATransaction commit];
 }
 
 - (void)downloadsButtonTapped
@@ -289,16 +288,33 @@ typedef enum {
     [self.navigationController pushViewController:downloadsVC animated:YES];
 }
 
-- (UIButton *)createCategoryButtonWithTitle:(NSString *)title frame:(CGRect)frame tag:(NSInteger)tag
+- (UIButton *)createCategoryButtonWithTitle:(NSString *)title cornerRadius:(CGFloat)cornerRadius tag:(NSInteger)tag
 {
+    BOOL isPad = (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad);
     UIButton *btn = [UIButton buttonWithType:UIButtonTypeCustom];
-    btn.frame = frame;
     btn.tag = tag;
-    btn.titleLabel.font = [UIFont boldSystemFontOfSize:12.0f];
+    
+    btn.titleLabel.font = [UIFont boldSystemFontOfSize:isPad ? 15.5f : 13.5f];
     [btn setTitle:title forState:UIControlStateNormal];
-    btn.layer.cornerRadius = 4.0f;
+    
+    [btn setTitleShadowColor:[UIColor blackColor] forState:UIControlStateNormal];
+    btn.titleLabel.shadowOffset = CGSizeMake(0.0f, -1.0f);
+    
+    CGFloat screenScale = [UIScreen mainScreen].scale;
+    btn.titleLabel.layer.contentsScale = screenScale;
+    btn.titleLabel.layer.rasterizationScale = screenScale;
+    
+    btn.layer.cornerRadius = cornerRadius;
     btn.layer.masksToBounds = YES;
-    btn.layer.borderWidth = 1.0f;
+    
+    btn.layer.borderWidth = (screenScale >= 2.0f) ? 0.5f : 1.0f;
+    btn.layer.borderColor = [UIColor clearColor].CGColor;
+    
+    CAGradientLayer *volumeLayer = [CAGradientLayer layer];
+    volumeLayer.name = @"CategorySubtleGloss";
+    volumeLayer.contentsScale = screenScale;
+    [btn.layer insertSublayer:volumeLayer atIndex:0];
+    
     [btn addTarget:self action:@selector(categoryButtonTapped:) forControlEvents:UIControlEventTouchUpInside];
     return btn;
 }
@@ -307,14 +323,40 @@ typedef enum {
 {
     NSArray *buttons = @[self.popularButton, self.filmsButton, self.seriesButton];
     for (UIButton *btn in buttons) {
+        CAGradientLayer *volumeLayer = nil;
+        for (CALayer *layer in btn.layer.sublayers) {
+            if ([layer.name isEqualToString:@"CategorySubtleGloss"]) {
+                volumeLayer = (CAGradientLayer *)layer;
+                break;
+            }
+        }
+        
         if (btn.tag == (NSInteger)self.currentCategory) {
-            btn.backgroundColor = [UIColor colorWithRed:0.62 green:0.08 blue:0.08 alpha:1.0];
-            btn.layer.borderColor = [[UIColor colorWithRed:0.85 green:0.20 blue:0.20 alpha:1.0] CGColor];
+            btn.backgroundColor = [UIColor colorWithRed:0.449f green:0.030f blue:0.047f alpha:1.0f];
+            btn.layer.borderColor = [UIColor colorWithRed:0.65f green:0.08f blue:0.11f alpha:0.50f].CGColor;
             [btn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+            
+            if (volumeLayer) {
+                volumeLayer.locations = @[@(0.0f), @(0.40f), @(1.0f)];
+                volumeLayer.colors = @[
+                                       (id)[UIColor colorWithWhite:1.0f alpha:0.09f].CGColor,
+                                       (id)[UIColor colorWithWhite:1.0f alpha:0.01f].CGColor,
+                                       (id)[UIColor colorWithWhite:0.0f alpha:0.10f].CGColor
+                                       ];
+            }
         } else {
-            btn.backgroundColor = [UIColor colorWithRed:0.14 green:0.14 blue:0.14 alpha:1.0];
-            btn.layer.borderColor = [[UIColor colorWithWhite:0.22f alpha:1.0f] CGColor];
-            [btn setTitleColor:[UIColor colorWithWhite:0.75f alpha:1.0f] forState:UIControlStateNormal];
+            btn.backgroundColor = [UIColor colorWithRed:0.150f green:0.150f blue:0.161f alpha:1.0f];
+            btn.layer.borderColor = [UIColor colorWithWhite:1.0f alpha:0.07f].CGColor;
+            [btn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+            
+            if (volumeLayer) {
+                volumeLayer.locations = @[@(0.0f), @(0.40f), @(1.0f)];
+                volumeLayer.colors = @[
+                                       (id)[UIColor colorWithWhite:1.0f alpha:0.05f].CGColor,
+                                       (id)[UIColor colorWithWhite:1.0f alpha:0.00f].CGColor,
+                                       (id)[UIColor colorWithWhite:0.0f alpha:0.04f].CGColor
+                                       ];
+            }
         }
     }
 }
@@ -334,36 +376,28 @@ typedef enum {
     [self loadCatalog];
 }
 
-- (BOOL)hasSessionCookies
-{
-    NSArray *cookies = [[NSHTTPCookieStorage sharedHTTPCookieStorage] cookies];
-    for (NSHTTPCookie *c in cookies) {
-        if ([[c name] isEqualToString:@"dle_user_id"] ||
-            [[c name] isEqualToString:@"PHPSESSID"] ||
-            [[c name] rangeOfString:@"anubis-auth"].location != NSNotFound) {
-            return YES;
-        }
-    }
-    return NO;
-}
+#pragma mark - Авторизация и загрузка каталога
 
 - (void)startLoadingProcess
 {
     [self.loadingIndicator startAnimating];
     
-    if ([HRHTTPClient sharedClient].authMode == HRAuthModePersonal && ![self hasSessionCookies]) {
+    HRHTTPClient *client = [HRHTTPClient sharedClient];
+    if (client.authMode == HRAuthModePersonal && ![client hasSessionCookies]) {
         NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
         NSString *login = [defaults stringForKey:@"HR_AUTH_LOGIN"] ?: @"";
         NSString *password = [defaults stringForKey:@"HR_AUTH_PASSWORD"] ?: @"";
         
         if ([login length] > 0 && [password length] > 0) {
-            [self performLoginWithCompletion:^(BOOL success) {
-                if (success) {
-                    [self loadCatalog];
-                } else {
-                    [self.loadingIndicator stopAnimating];
-                }
-            }];
+            [client loginWithUsername:login
+                             password:password
+                           completion:^(BOOL success, NSError *error) {
+                               if (success) {
+                                   [self loadCatalog];
+                               } else {
+                                   [self.loadingIndicator stopAnimating];
+                               }
+                           }];
             return;
         }
     }
@@ -371,39 +405,8 @@ typedef enum {
     [self loadCatalog];
 }
 
-- (void)performLoginWithCompletion:(void (^)(BOOL success))completion
-{
-    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
-    NSString *login = [defaults stringForKey:@"HR_AUTH_LOGIN"] ?: @"";
-    NSString *password = [defaults stringForKey:@"HR_AUTH_PASSWORD"] ?: @"";
-    
-    if ([login length] == 0 || [password length] == 0) {
-        if (completion) completion(NO);
-        return;
-    }
-    
-    NSDictionary *params = @{
-                             @"login_name": login,
-                             @"login_password": password,
-                             @"login_not_save": @"0"
-                             };
-    
-    [[HRHTTPClient sharedClient] POST:@"/ajax/login/" parameters:params completion:^(NSData *data, NSHTTPURLResponse *response, NSError *error) {
-        if (error || !data) {
-            if (completion) completion(NO);
-            return;
-        }
-        
-        NSError *jsonErr = nil;
-        NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:&jsonErr];
-        BOOL ok = [[json objectForKey:@"success"] boolValue];
-        if (completion) completion(ok);
-    }];
-}
-
 - (void)resetToHomeScreen
 {
-    // Возврат на главную: сбрасываем поиск и возвращаем категорию «Популярное».
     BOOL needsReload = self.isSearching || self.currentCategory != HRCatalogCategoryPopular;
     
     self.isSearching = NO;
@@ -413,7 +416,6 @@ typedef enum {
     [self.searchBar setShowsCancelButton:NO animated:NO];
     [self updateCategoryButtonsStyle];
     
-    // Перезагружаем каталог, чтобы убрать результаты предыдущего поиска.
     if (needsReload || [self.movies count] == 0) {
         [self loadCatalog];
     } else {
@@ -537,11 +539,14 @@ typedef enum {
         cell = [[HRMovieCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:CellIdentifier];
     }
     
-    HRMovie *movie = [self.movies objectAtIndex:indexPath.row];
-    [cell configureWithMovie:movie];
+    HRMovie *movie = nil;
+    if (indexPath.row < [self.movies count]) {
+        movie = [self.movies objectAtIndex:indexPath.row];
+        [cell configureWithMovie:movie];
+    }
     
     cell.posterImageView.image = nil;
-    if ([movie.posterURLString length] > 0) {
+    if (movie && [movie.posterURLString length] > 0) {
         NSString *urlToLoad = movie.posterURLString;
         __weak HRMovieCell *weakCell = cell;
         [[HRImageCache sharedCache] loadImageForURLString:urlToLoad completion:^(UIImage *image) {

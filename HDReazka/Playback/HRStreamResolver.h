@@ -44,4 +44,11 @@ NSError *error);
 + (NSDictionary *)parseStreamsFromRawURLString:(NSString *)rawString;
 + (NSString *)bestQualityKeyFromStreams:(NSDictionary *)streams preferredQuality:(NSString *)preferred;
 
+
+
+// 5. метод резолвера для будущей праки ссылок
++ (void)resolveDirectMediaURL:(NSString *)rawURL
+                   completion:(void (^)(NSString *resolvedURL))completion;
+
+
 @end

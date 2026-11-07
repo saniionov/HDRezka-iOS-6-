@@ -1,4 +1,3 @@
-
 #import "AppDelegate.h"
 #import "HRCatalogViewController.h"
 #import "HRLocalListViewController.h"
@@ -7,7 +6,15 @@
 #import "HRDatabase.h"
 #import "HRTheme.h"
 #import "HRWelcomeViewController.h"
+#import "HRCustomTabBar.h"
 #import <stdio.h>
+
+@interface AppDelegate () <HRCustomTabBarDelegate>
+
+@property (nonatomic, strong) UITabBarController *rootTabBarController;
+@property (nonatomic, strong) HRCustomTabBar *customTabBar;
+
+@end
 
 @implementation AppDelegate
 
@@ -68,11 +75,6 @@ didFinishLaunchingWithOptions:(NSDictionary *)launchOptions
     [[UINavigationController alloc]
      initWithRootViewController:catalogVC];
     
-    navCatalog.tabBarItem =
-    [[UITabBarItem alloc] initWithTitle:@"Главная"
-                                  image:[HRTheme tabBarIconHome]
-                                    tag:0];
-    
     // Вкладка 2: Избранное
     HRLocalListViewController *favoritesVC =
     [[HRLocalListViewController alloc]
@@ -81,11 +83,6 @@ didFinishLaunchingWithOptions:(NSDictionary *)launchOptions
     UINavigationController *navFavorites =
     [[UINavigationController alloc]
      initWithRootViewController:favoritesVC];
-    
-    navFavorites.tabBarItem =
-    [[UITabBarItem alloc] initWithTitle:@"Избранное"
-                                  image:[HRTheme tabBarIconFavorites]
-                                    tag:1];
     
     // Вкладка 3: История
     HRLocalListViewController *historyVC =
@@ -96,11 +93,6 @@ didFinishLaunchingWithOptions:(NSDictionary *)launchOptions
     [[UINavigationController alloc]
      initWithRootViewController:historyVC];
     
-    navHistory.tabBarItem =
-    [[UITabBarItem alloc] initWithTitle:@"История"
-                                  image:[HRTheme tabBarIconHistory]
-                                    tag:2];
-    
     // Вкладка 4: Настройки
     HRSettingsViewController *settingsVC =
     [[HRSettingsViewController alloc] init];
@@ -109,45 +101,44 @@ didFinishLaunchingWithOptions:(NSDictionary *)launchOptions
     [[UINavigationController alloc]
      initWithRootViewController:settingsVC];
     
-    navSettings.tabBarItem =
-    [[UITabBarItem alloc] initWithTitle:@"Настройки"
-                                  image:[HRTheme tabBarIconSettings]
-                                    tag:3];
-    
     // 6. Настройка UITabBarController
-    UITabBarController *tabBarController =
-    [[UITabBarController alloc] init];
+    self.rootTabBarController = [[UITabBarController alloc] init];
+    self.rootTabBarController.viewControllers = @[navCatalog, navFavorites, navHistory, navSettings];
+    self.rootTabBarController.delegate = self;
     
-    tabBarController.viewControllers =
-    @[navCatalog, navFavorites, navHistory, navSettings];
+    // Полностью скрываем стандартный системный бар
+    self.rootTabBarController.tabBar.hidden = YES;
     
-    tabBarController.delegate = self;
+    // 7. Создание и прикрепление HRCustomTabBar с адаптивной высотой (64 pt на iPad, 49 pt на iPhone)
+    BOOL isIPad = (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad);
+    CGFloat barHeight = isIPad ? 64.0f : 49.0f;
     
-    // Тёмный стиль UITabBar для iOS 6
-    tabBarController.tabBar.tintColor =
-    [UIColor colorWithRed:0.10
-                    green:0.10
-                     blue:0.10
-                    alpha:1.0];
+    CGRect barFrame = CGRectMake(0.0f,
+                                 self.window.bounds.size.height - barHeight,
+                                 self.window.bounds.size.width,
+                                 barHeight);
     
-    if ([tabBarController.tabBar
-         respondsToSelector:@selector(setSelectedImageTintColor:)]) {
-        
-        tabBarController.tabBar.selectedImageTintColor =
-        [UIColor colorWithRed:0.85
-                        green:0.20
-                         blue:0.20
-                        alpha:1.0];
-    }
+    self.customTabBar = [[HRCustomTabBar alloc] initWithFrame:barFrame];
+    self.customTabBar.delegate = self;
+    self.customTabBar.contentHeight = barHeight;
     
-    // 7. Установка корневого контроллера и показ окна
-    self.window.rootViewController = tabBarController;
+    // Заполняем вкладки названиями и программными векторными иконками из HRTheme
+    [self.customTabBar setBarItemsWithTitles:@[@"Главная", @"Избранное", @"История", @"Настройки"]
+                                      images:@[[HRTheme tabBarIconHome],
+     [HRTheme tabBarIconFavorites],
+     [HRTheme tabBarIconHistory],
+     [HRTheme tabBarIconSettings]]
+                              selectedImages:nil];
     
+    // Встраиваем кастомный бар поверх содержимого контроллера
+    [self.rootTabBarController.view addSubview:self.customTabBar];
+    
+    // 8. Установка корневого контроллера и показ окна
+    self.window.rootViewController = self.rootTabBarController;
     [self.window makeKeyAndVisible];
     
-    // 8. Приветствие при первом запуске
-    NSUserDefaults *welcomeDefaults =
-    [NSUserDefaults standardUserDefaults];
+    // 9. Приветствие при первом запуске
+    NSUserDefaults *welcomeDefaults = [NSUserDefaults standardUserDefaults];
     
     if (![welcomeDefaults boolForKey:@"HR_WELCOME_DID_READ_V1"]) {
         
@@ -161,36 +152,49 @@ didFinishLaunchingWithOptions:(NSDictionary *)launchOptions
         welcomeNav.modalPresentationStyle =
         UIModalPresentationFullScreen;
         
-        [tabBarController presentViewController:welcomeNav
-                                       animated:NO
-                                     completion:nil];
+        [self.rootTabBarController presentViewController:welcomeNav
+                                                animated:NO
+                                              completion:nil];
     }
     
-    NSLog(@"[Navigation] Запущен таб-бар в тёмном стиле и красной подсветкой.");
+    NSLog(@"[Navigation] Запущен HRCustomTabBar с высотой %.0f pt.", barHeight);
     
     return YES;
+}
+
+#pragma mark - HRCustomTabBarDelegate
+
+- (void)customTabBar:(HRCustomTabBar *)tabBar didSelectItemAtIndex:(NSInteger)index
+{
+    if (index == self.rootTabBarController.selectedIndex) {
+        NSArray *controllers = [self.rootTabBarController viewControllers];
+        if (index < [controllers count]) {
+            UINavigationController *navigationController =
+            (UINavigationController *)[controllers objectAtIndex:index];
+            if ([navigationController isKindOfClass:[UINavigationController class]]) {
+                [navigationController popToRootViewControllerAnimated:YES];
+                if (index == 0) {
+                    UIViewController *rootController =
+                    [navigationController.viewControllers count] > 0
+                    ? [navigationController.viewControllers objectAtIndex:0]
+                    : nil;
+                    if ([rootController isKindOfClass:[HRCatalogViewController class]]) {
+                        [(HRCatalogViewController *)rootController resetToHomeScreen];
+                    }
+                }
+            }
+        }
+    }
+    self.rootTabBarController.selectedIndex = index;
 }
 
 - (void)tabBarController:(UITabBarController *)tabBarController
  didSelectViewController:(UIViewController *)viewController
 {
-    // Нажатие вкладки «Главная» возвращает каталог в исходное состояние.
-    if (viewController ==
-        [[tabBarController viewControllers] objectAtIndex:0]) {
-        
-        UINavigationController *navigationController =
-        (UINavigationController *)viewController;
-        
-        [navigationController popToRootViewControllerAnimated:NO];
-        
-        UIViewController *rootController =
-        [navigationController.viewControllers count] > 0
-        ? [navigationController.viewControllers objectAtIndex:0]
-        : nil;
-        
-        if ([rootController isKindOfClass:[HRCatalogViewController class]]) {
-            [(HRCatalogViewController *)rootController resetToHomeScreen];
-        }
+    // Синхронизация на случай программного изменения вкладки извне
+    NSInteger selectedIdx = [tabBarController.viewControllers indexOfObject:viewController];
+    if (selectedIdx != NSNotFound && self.customTabBar.selectedIndex != selectedIdx) {
+        [self.customTabBar selectItemAtIndex:selectedIdx animated:YES];
     }
 }
 

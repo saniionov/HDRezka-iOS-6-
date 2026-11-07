@@ -22,6 +22,7 @@
 		2232ECB23086630700BCD301 /* HRStreamResolver.m in Sources */ = {isa = PBXBuildFile; fileRef = 2232ECB13086630700BCD301 /* HRStreamResolver.m */; };
 		2232ECB43086639A00BCD301 /* MediaPlayer.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2232ECB33086639A00BCD301 /* MediaPlayer.framework */; };
 		2232ECB73086651D00BCD301 /* HRTranslator.m in Sources */ = {isa = PBXBuildFile; fileRef = 2232ECB63086651D00BCD301 /* HRTranslator.m */; };
+		2239902F3095D2060012C9EB /* HRCustomTabBar.m in Sources */ = {isa = PBXBuildFile; fileRef = 2239902E3095D2060012C9EB /* HRCustomTabBar.m */; };
 		2245B25830865106006B22ED /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2245B25730865106006B22ED /* UIKit.framework */; };
 		2245B25A30865106006B22ED /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2245B25930865106006B22ED /* Foundation.framework */; };
 		2245B25C30865106006B22ED /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2245B25B30865106006B22ED /* CoreGraphics.framework */; };
@@ -43,6 +44,10 @@
 		2245B29A3086538D006B22ED /* libsqlite3.dylib in Frameworks */ = {isa = PBXBuildFile; fileRef = 2245B2993086538D006B22ED /* libsqlite3.dylib */; };
 		2245B29C3086539E006B22ED /* CFNetwork.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2245B29B3086539E006B22ED /* CFNetwork.framework */; };
 		22914A48308BCB6E00D069F9 /* HRPublicAuthViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = 22914A47308BCB6E00D069F9 /* HRPublicAuthViewController.m */; };
+		22B3D702309F43AF00906DA0 /* FAQText.txt in Resources */ = {isa = PBXBuildFile; fileRef = 22B3D701309F43AF00906DA0 /* FAQText.txt */; };
+		22CD0B82309299B60092BE43 /* HRSelectionSheet.m in Sources */ = {isa = PBXBuildFile; fileRef = 22CD0B81309299B60092BE43 /* HRSelectionSheet.m */; };
+		22CD0B85309299E80092BE43 /* HRM3UExporter.m in Sources */ = {isa = PBXBuildFile; fileRef = 22CD0B84309299E80092BE43 /* HRM3UExporter.m */; };
+		22CD0B8830929DB90092BE43 /* HRGestureMoviePlayerViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = 22CD0B8730929DB90092BE43 /* HRGestureMoviePlayerViewController.m */; };
 		22D5C09A308A74FF00A7C990 /* HRDownloadsViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = 22D5C099308A74FF00A7C990 /* HRDownloadsViewController.m */; };
 		22DD1A0B308942170026D092 /* HRSettingsViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = 22DD1A0A308942170026D092 /* HRSettingsViewController.m */; };
 		22EB52FB308A202800462945 /* HRImageCache.m in Sources */ = {isa = PBXBuildFile; fileRef = 22EB52FA308A202800462945 /* HRImageCache.m */; };
@@ -104,6 +109,8 @@
 		2232ECB33086639A00BCD301 /* MediaPlayer.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MediaPlayer.framework; path = System/Library/Frameworks/MediaPlayer.framework; sourceTree = SDKROOT; };
 		2232ECB53086651D00BCD301 /* HRTranslator.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = HRTranslator.h; sourceTree = "<group>"; };
 		2232ECB63086651D00BCD301 /* HRTranslator.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = HRTranslator.m; sourceTree = "<group>"; };
+		2239902D3095D2060012C9EB /* HRCustomTabBar.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = HRCustomTabBar.h; sourceTree = SOURCE_ROOT; };
+		2239902E3095D2060012C9EB /* HRCustomTabBar.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = HRCustomTabBar.m; sourceTree = SOURCE_ROOT; };
 		2245B25430865106006B22ED /* HDRezka.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = HDRezka.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		2245B25730865106006B22ED /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
 		2245B25930865106006B22ED /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = System/Library/Frameworks/Foundation.framework; sourceTree = SDKROOT; };
@@ -132,6 +139,13 @@
 		2245B29B3086539E006B22ED /* CFNetwork.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CFNetwork.framework; path = System/Library/Frameworks/CFNetwork.framework; sourceTree = SDKROOT; };
 		22914A46308BCB6E00D069F9 /* HRPublicAuthViewController.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = HRPublicAuthViewController.h; sourceTree = SOURCE_ROOT; };
 		22914A47308BCB6E00D069F9 /* HRPublicAuthViewController.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = HRPublicAuthViewController.m; sourceTree = SOURCE_ROOT; };
+		22B3D701309F43AF00906DA0 /* FAQText.txt */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text; path = FAQText.txt; sourceTree = "<group>"; };
+		22CD0B80309299B60092BE43 /* HRSelectionSheet.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = HRSelectionSheet.h; sourceTree = "<group>"; };
+		22CD0B81309299B60092BE43 /* HRSelectionSheet.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = HRSelectionSheet.m; sourceTree = "<group>"; };
+		22CD0B83309299E80092BE43 /* HRM3UExporter.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = HRM3UExporter.h; sourceTree = "<group>"; };
+		22CD0B84309299E80092BE43 /* HRM3UExporter.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = HRM3UExporter.m; sourceTree = "<group>"; };
+		22CD0B8630929DB90092BE43 /* HRGestureMoviePlayerViewController.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = HRGestureMoviePlayerViewController.h; sourceTree = "<group>"; };
+		22CD0B8730929DB90092BE43 /* HRGestureMoviePlayerViewController.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = HRGestureMoviePlayerViewController.m; sourceTree = "<group>"; };
 		22D5C098308A74FF00A7C990 /* HRDownloadsViewController.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = HRDownloadsViewController.h; sourceTree = SOURCE_ROOT; };
 		22D5C099308A74FF00A7C990 /* HRDownloadsViewController.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = HRDownloadsViewController.m; sourceTree = SOURCE_ROOT; };
 		22DD1A09308942170026D092 /* HRSettingsViewController.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = HRSettingsViewController.h; path = HDReazka/HRSettingsViewController.h; sourceTree = SOURCE_ROOT; };
@@ -192,6 +206,8 @@
 		2232EC9730865B7B00BCD301 /* App */ = {
 			isa = PBXGroup;
 			children = (
+				2239902D3095D2060012C9EB /* HRCustomTabBar.h */,
+				2239902E3095D2060012C9EB /* HRCustomTabBar.m */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -218,6 +234,10 @@
 				22EB52FD308A6DBC00462945 /* HRDownloadTask.m */,
 				22EB52FF308A6DF800462945 /* HRDownloadManager.h */,
 				22EB5300308A6DF800462945 /* HRDownloadManager.m */,
+				22CD0B80309299B60092BE43 /* HRSelectionSheet.h */,
+				22CD0B81309299B60092BE43 /* HRSelectionSheet.m */,
+				22CD0B83309299E80092BE43 /* HRM3UExporter.h */,
+				22CD0B84309299E80092BE43 /* HRM3UExporter.m */,
 			);
 			path = Core;
 			sourceTree = "<group>";
@@ -251,6 +271,8 @@
 			children = (
 				2232ECB03086630700BCD301 /* HRStreamResolver.h */,
 				2232ECB13086630700BCD301 /* HRStreamResolver.m */,
+				22CD0B8630929DB90092BE43 /* HRGestureMoviePlayerViewController.h */,
+				22CD0B8730929DB90092BE43 /* HRGestureMoviePlayerViewController.m */,
 			);
 			path = Playback;
 			sourceTree = "<group>";
@@ -303,6 +325,7 @@
 		2245B24B30865106006B22ED = {
 			isa = PBXGroup;
 			children = (
+				22B3D701309F43AF00906DA0 /* FAQText.txt */,
 				22F167D7308D4B830014AE50 /* WelcomeText.txt */,
 				22F167D2308D08280014AE50 /* Icon-72.png */,
 				22F167D0308D07E70014AE50 /* Icon.png */,
@@ -496,6 +519,7 @@
 				22F167D1308D07E70014AE50 /* Icon.png in Resources */,
 				22F167D3308D08280014AE50 /* Icon-72.png in Resources */,
 				22F167D8308D4B830014AE50 /* WelcomeText.txt in Resources */,
+				22B3D702309F43AF00906DA0 /* FAQText.txt in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -553,6 +577,10 @@
 				22D5C09A308A74FF00A7C990 /* HRDownloadsViewController.m in Sources */,
 				22914A48308BCB6E00D069F9 /* HRPublicAuthViewController.m in Sources */,
 				22F167D6308D43E70014AE50 /* HRWelcomeViewController.m in Sources */,
+				22CD0B82309299B60092BE43 /* HRSelectionSheet.m in Sources */,
+				22CD0B85309299E80092BE43 /* HRM3UExporter.m in Sources */,
+				22CD0B8830929DB90092BE43 /* HRGestureMoviePlayerViewController.m in Sources */,
+				2239902F3095D2060012C9EB /* HRCustomTabBar.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -635,7 +663,7 @@
 				GCC_WARN_ABOUT_RETURN_TYPE = YES;
 				GCC_WARN_UNINITIALIZED_AUTOS = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 6.1;
+				IPHONEOS_DEPLOYMENT_TARGET = 6.0;
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -660,7 +688,7 @@
 				GCC_WARN_ABOUT_RETURN_TYPE = YES;
 				GCC_WARN_UNINITIALIZED_AUTOS = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 6.1;
+				IPHONEOS_DEPLOYMENT_TARGET = 6.0;
 				OTHER_CFLAGS = "-DNS_BLOCK_ASSERTIONS=1";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";

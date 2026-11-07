@@ -1,8 +1,13 @@
 #import "HRDownloadManager.h"
+#import "HRM3UExporter.h"
 #import <UIKit/UIKit.h>
+#import <AVFoundation/AVFoundation.h>
 #import <dlfcn.h>
 
-typedef int32_t  IOReturn;
+#define kMaxConcurrentDownloads 2
+#define kHRMetadataStoreKey @"HRDownloadMetadata"
+
+typedef int32_t IOReturn;
 typedef uint32_t IOPMAssertionID;
 typedef uint32_t IOPMAssertionLevel;
 
@@ -15,10 +20,14 @@ static IOReturn (*pfn_IOPMAssertionRelease)(IOPMAssertionID) = NULL;
 @interface HRDownloadManager () <NSURLConnectionDataDelegate>
 
 @property (nonatomic, strong) NSMutableArray *internalTasks;
-@property (nonatomic, strong) NSMutableDictionary *activeConnections; // taskId -> NSURLConnection
-@property (nonatomic, strong) NSMutableDictionary *fileHandles;       // taskId -> NSFileHandle
+@property (nonatomic, strong) NSMutableDictionary *activeConnections;
+@property (nonatomic, strong) NSMutableDictionary *fileHandles;
 @property (nonatomic, assign) IOPMAssertionID powerAssertion;
 @property (nonatomic, assign) UIBackgroundTaskIdentifier bgTask;
+@property (nonatomic, strong) NSMutableArray *waitingTaskIDs;
+
+// Бесконечный фоновый аудиоплеер для обхода 10-минутного лимита
+@property (nonatomic, strong) AVAudioPlayer *silentAudioPlayer;
 
 @end
 
@@ -41,6 +50,7 @@ static IOReturn (*pfn_IOPMAssertionRelease)(IOPMAssertionID) = NULL;
         _internalTasks = [[NSMutableArray alloc] init];
         _activeConnections = [[NSMutableDictionary alloc] init];
         _fileHandles = [[NSMutableDictionary alloc] init];
+        _waitingTaskIDs = [[NSMutableArray alloc] init];
         _powerAssertion = 0;
         _bgTask = UIBackgroundTaskInvalid;
         
@@ -52,31 +62,189 @@ static IOReturn (*pfn_IOPMAssertionRelease)(IOPMAssertionID) = NULL;
                                                             error:nil];
         }
         
-        // Восстанавливаем ранее скачанные файлы с диска
+        [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(handleBackgroundAudioSettingChange:) name:@"HRBackgroundAudioSettingChanged" object:nil];
+        
+        [self setupSilentAudioPlayer];
         [self restoreExistingDownloads];
     }
     return self;
 }
 
+- (void)dealloc
+{
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+}
+
+#pragma mark - Генерация и настройка Silent Audio Loop
+
+- (void)handleBackgroundAudioSettingChange:(NSNotification *)note
+{
+    BOOL isEnabled = [note.object boolValue];
+    NSLog(@"[HRDownloadManager] Получено уведомление о фоновом аудио: %@", isEnabled ? @"ВКЛЮЧИТЬ" : @"ОТКЛЮЧИТЬ");
+    
+    if (isEnabled) {
+        if (!self.silentAudioPlayer) {
+            [self setupSilentAudioPlayer];
+            NSLog(@"[HRDownloadManager] SilentAudioPlayer создан и запущен.");
+        } else {
+            NSLog(@"[HRDownloadManager] SilentAudioPlayer уже активен.");
+        }
+    } else {
+        if (self.silentAudioPlayer) {
+            [self.silentAudioPlayer stop];
+            self.silentAudioPlayer = nil;
+            NSLog(@"[HRDownloadManager] SilentAudioPlayer остановлен и освобожден.");
+        } else {
+            NSLog(@"[HRDownloadManager] SilentAudioPlayer уже был отключен.");
+        }
+    }
+}
+
+- (void)setupSilentAudioPlayer
+{
+    BOOL isBgEnabled = [[NSUserDefaults standardUserDefaults] boolForKey:@"HR_BACKGROUND_AUDIO_ENABLED"];
+    if (!isBgEnabled) return;
+    
+    // Программная генерация 1-секундного тишайшего WAV-файла (PCM, 8000 Hz, 16 bit, Mono)
+    NSData *wavData = [self generateSilentWAVData];
+    if (!wavData) return;
+    
+    NSError *error = nil;
+    _silentAudioPlayer = [[AVAudioPlayer alloc] initWithData:wavData error:&error];
+    if (!_silentAudioPlayer || error) {
+        NSLog(@"[HRDownloadManager] Ошибка инициализации фонового плеера тишины: %@", error);
+        return;
+    }
+    
+    _silentAudioPlayer.numberOfLoops = -1; // Бесконечный цикл воспроизведения
+    _silentAudioPlayer.volume = 0.01f;     // Минимальная громкость для удержания аудио-сессии iOS
+    [_silentAudioPlayer prepareToPlay];
+}
+
+- (NSData *)generateSilentWAVData
+{
+    const uint32_t sampleRate = 8000;
+    const uint16_t numChannels = 1;
+    const uint16_t bitsPerSample = 16;
+    const uint32_t numSamples = sampleRate; // 1 секунда звука
+    const uint32_t dataSize = numSamples * numChannels * (bitsPerSample / 8);
+    const uint32_t chunkSize = 36 + dataSize;
+    
+    NSMutableData *data = [NSMutableData dataWithCapacity:44 + dataSize];
+    
+    // RIFF Header
+    [data appendBytes:"RIFF" length:4];
+    [data appendBytes:&chunkSize length:4];
+    [data appendBytes:"WAVE" length:4];
+    
+    // fmt Subchunk
+    [data appendBytes:"fmt " length:4];
+    uint32_t subchunk1Size = 16;
+    uint16_t audioFormat = 1; // PCM
+    uint32_t byteRate = sampleRate * numChannels * (bitsPerSample / 8);
+    uint16_t blockAlign = numChannels * (bitsPerSample / 8);
+    
+    [data appendBytes:&subchunk1Size length:4];
+    [data appendBytes:&audioFormat length:2];
+    [data appendBytes:&numChannels length:2];
+    [data appendBytes:&sampleRate length:4];
+    [data appendBytes:&byteRate length:4];
+    [data appendBytes:&blockAlign length:2];
+    [data appendBytes:&bitsPerSample length:2];
+    
+    // data Subchunk (заполнен нулями — чистая тишина)
+    [data appendBytes:"data" length:4];
+    [data appendBytes:&dataSize length:4];
+    
+    void *zeroBytes = calloc(1, dataSize);
+    if (zeroBytes) {
+        [data appendBytes:zeroBytes length:dataSize];
+        free(zeroBytes);
+    }
+    
+    return data;
+}
+
+#pragma mark - Сохранение Состояния (База Метаданных)
+
+- (void)saveMetadataForTask:(HRDownloadTask *)task
+{
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    NSMutableDictionary *meta = [[defaults dictionaryForKey:kHRMetadataStoreKey] mutableCopy];
+    if (!meta) meta = [[NSMutableDictionary alloc] init];
+    
+    NSDictionary *taskInfo = @{
+                               @"title": task.title ?: @"",
+                               @"subtitle": task.subtitle ?: @"",
+                               @"totalBytes": @(task.totalBytes),
+                               @"status": @(task.status)
+                               };
+    [meta setObject:taskInfo forKey:task.taskId];
+    
+    [defaults setObject:meta forKey:kHRMetadataStoreKey];
+    [defaults synchronize];
+}
+
+- (void)removeMetadataForTaskId:(NSString *)taskId
+{
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    NSMutableDictionary *meta = [[defaults dictionaryForKey:kHRMetadataStoreKey] mutableCopy];
+    if (meta && [meta objectForKey:taskId]) {
+        [meta removeObjectForKey:taskId];
+        [defaults setObject:meta forKey:kHRMetadataStoreKey];
+        [defaults synchronize];
+    }
+}
+
 - (void)restoreExistingDownloads
 {
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    NSDictionary *meta = [defaults dictionaryForKey:kHRMetadataStoreKey];
+    
     NSString *dir = [self downloadsDirectory];
     NSArray *files = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:dir error:nil];
+    
     for (NSString *fileName in files) {
         if ([fileName hasSuffix:@".mp4"]) {
             NSString *fullPath = [dir stringByAppendingPathComponent:fileName];
             NSDictionary *attrs = [[NSFileManager defaultManager] attributesOfItemAtPath:fullPath error:nil];
             long long fileSize = [[attrs objectForKey:NSFileSize] longLongValue];
+            
             if (fileSize > 0) {
                 HRDownloadTask *task = [[HRDownloadTask alloc] init];
                 task.taskId = [fileName stringByDeletingPathExtension];
-                task.title = task.taskId;
-                task.subtitle = @"Локальный файл";
                 task.localFilePath = fullPath;
                 task.downloadedBytes = fileSize;
-                task.totalBytes = fileSize;
-                task.progress = 1.0f;
-                task.status = HRDownloadStatusFinished;
+                
+                NSDictionary *taskInfo = [meta objectForKey:task.taskId];
+                if (taskInfo) {
+                    task.title = [taskInfo objectForKey:@"title"];
+                    task.subtitle = [taskInfo objectForKey:@"subtitle"];
+                    task.totalBytes = [[taskInfo objectForKey:@"totalBytes"] longLongValue];
+                    
+                    NSInteger savedStatus = [[taskInfo objectForKey:@"status"] integerValue];
+                    if (savedStatus == HRDownloadStatusDownloading || savedStatus == HRDownloadStatusWaiting) {
+                        task.status = HRDownloadStatusPaused;
+                    } else {
+                        task.status = savedStatus;
+                    }
+                } else {
+                    task.title = task.taskId;
+                    task.subtitle = @"Локальный файл";
+                    task.totalBytes = fileSize;
+                    task.status = HRDownloadStatusFinished;
+                }
+                
+                if (task.totalBytes > 0 && task.downloadedBytes >= task.totalBytes) {
+                    task.status = HRDownloadStatusFinished;
+                    task.downloadedBytes = task.totalBytes;
+                    task.progress = 1.0f;
+                } else if (task.totalBytes > 0) {
+                    task.progress = (float)task.downloadedBytes / (float)task.totalBytes;
+                } else {
+                    task.progress = 0.0f;
+                }
+                
                 [_internalTasks addObject:task];
             }
         }
@@ -88,17 +256,34 @@ static IOReturn (*pfn_IOPMAssertionRelease)(IOPMAssertionID) = NULL;
     return [self.internalTasks copy];
 }
 
+- (HRDownloadIndicatorState)indicatorState
+{
+    BOOL isDownloading = NO;
+    BOOL hasFailed = NO;
+    
+    for (HRDownloadTask *task in self.internalTasks) {
+        if (task.status == HRDownloadStatusDownloading) {
+            isDownloading = YES;
+        } else if (task.status == HRDownloadStatusFailed) {
+            hasFailed = YES;
+        }
+    }
+    
+    if (isDownloading) return HRDownloadIndicatorStateDownloading;
+    if (hasFailed) return HRDownloadIndicatorStateFailed;
+    return HRDownloadIndicatorStateIdle;
+}
+
 - (NSString *)downloadsDirectory
 {
     NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
     return [[paths objectAtIndex:0] stringByAppendingPathComponent:@"Downloads"];
 }
 
-// Вызывается из UI-потока при полном сбросе приложения.
-// Сначала разрываем связи с соединениями, чтобы отложенные delegate-callbacks
-// после cancel не нашли уже удалённые задачи и файловые дескрипторы.
 - (BOOL)clearAllDownloads
 {
+    [self.waitingTaskIDs removeAllObjects];
+    
     NSArray *connections = [[self.activeConnections allValues] copy];
     [self.activeConnections removeAllObjects];
     for (NSURLConnection *connection in connections) {
@@ -108,12 +293,7 @@ static IOReturn (*pfn_IOPMAssertionRelease)(IOPMAssertionID) = NULL;
     NSArray *handles = [[self.fileHandles allValues] copy];
     [self.fileHandles removeAllObjects];
     for (NSFileHandle *handle in handles) {
-        @try {
-            [handle closeFile];
-        }
-        @catch (NSException *exception) {
-            // Продолжаем очистку остальных файлов; дескриптор уже недоступен менеджеру.
-        }
+        @try { [handle closeFile]; } @catch (NSException *exception) {}
     }
     
     [self.internalTasks removeAllObjects];
@@ -121,30 +301,24 @@ static IOReturn (*pfn_IOPMAssertionRelease)(IOPMAssertionID) = NULL;
     
     NSFileManager *fileManager = [NSFileManager defaultManager];
     NSString *directory = [self downloadsDirectory];
-    NSError *error = nil;
+    NSArray *files = [fileManager contentsOfDirectoryAtPath:directory error:nil];
+    BOOL allDeleted = YES;
     
-    if ([fileManager fileExistsAtPath:directory] &&
-        ![fileManager removeItemAtPath:directory error:&error]) {
-        NSLog(@"[HRDownloadManager] Не удалось удалить каталог загрузок: %@", error);
-        [[NSNotificationCenter defaultCenter] postNotificationName:kHRDownloadProgressNotification object:nil];
-        return NO;
+    for (NSString *file in files) {
+        NSString *fullPath = [directory stringByAppendingPathComponent:file];
+        if (![fileManager removeItemAtPath:fullPath error:nil]) {
+            allDeleted = NO;
+        }
     }
     
-    error = nil;
-    if (![fileManager createDirectoryAtPath:directory
-                withIntermediateDirectories:YES
-                                 attributes:nil
-                                      error:&error]) {
-        NSLog(@"[HRDownloadManager] Не удалось создать каталог загрузок: %@", error);
-        [[NSNotificationCenter defaultCenter] postNotificationName:kHRDownloadProgressNotification object:nil];
-        return NO;
-    }
+    [[NSUserDefaults standardUserDefaults] removeObjectForKey:kHRMetadataStoreKey];
+    [[NSUserDefaults standardUserDefaults] synchronize];
     
     [[NSNotificationCenter defaultCenter] postNotificationName:kHRDownloadProgressNotification object:nil];
-    return YES;
+    return allDeleted;
 }
 
-#pragma mark - Удержание питания (IOKit + UIBackgroundTask)
+#pragma mark - Удержание питания и Фоновый аудио-режим
 
 - (void)updatePowerAssertionState
 {
@@ -169,12 +343,15 @@ static IOReturn (*pfn_IOPMAssertionRelease)(IOPMAssertionID) = NULL;
     }
     
     if (hasActive) {
+        // 1. Стандартный UIBackgroundTaskIdentifier
         if (self.bgTask == UIBackgroundTaskInvalid) {
             self.bgTask = [[UIApplication sharedApplication] beginBackgroundTaskWithExpirationHandler:^{
                 [[UIApplication sharedApplication] endBackgroundTask:self.bgTask];
                 self.bgTask = UIBackgroundTaskInvalid;
             }];
         }
+        
+        // 2. IOKit: блокировка засыпания устройства при заблокированном экране
         if (self.powerAssertion == 0 && pfn_IOPMAssertionCreateWithName != NULL) {
             CFStringRef reason = CFSTR("HDRezka Background Video Download");
             IOPMAssertionID newAssertion = 0;
@@ -187,15 +364,56 @@ static IOReturn (*pfn_IOPMAssertionRelease)(IOPMAssertionID) = NULL;
                 NSLog(@"[IOKit] Сон системы заблокирован для фоновой загрузки.");
             }
         }
+        
+        // 3. Silent Audio: бесконечная работа при свернутом приложении (кнопка Home)
+        AVAudioSession *session = [AVAudioSession sharedInstance];
+        [session setCategory:AVAudioSessionCategoryPlayback error:nil];
+        [session setActive:YES error:nil];
+        
+        if (self.silentAudioPlayer && !self.silentAudioPlayer.isPlaying) {
+            [self.silentAudioPlayer play];
+            NSLog(@"[Background Audio] Бесконечный фоновый аудиоплеер запущен.");
+        }
+        
     } else {
+        // Загрузок нет: освобождаем ресурсы
+        if (self.silentAudioPlayer && self.silentAudioPlayer.isPlaying) {
+            [self.silentAudioPlayer pause];
+            [[AVAudioSession sharedInstance] setActive:NO error:nil];
+            NSLog(@"[Background Audio] Фоновый аудиоплеер остановлен.");
+        }
+        
         if (self.powerAssertion != 0 && pfn_IOPMAssertionRelease != NULL) {
             pfn_IOPMAssertionRelease(self.powerAssertion);
             self.powerAssertion = 0;
             NSLog(@"[IOKit] Блокировка сна снята.");
         }
+        
         if (self.bgTask != UIBackgroundTaskInvalid) {
             [[UIApplication sharedApplication] endBackgroundTask:self.bgTask];
             self.bgTask = UIBackgroundTaskInvalid;
+        }
+    }
+}
+
+#pragma mark - Логика Очереди (Queue Limit)
+
+- (void)processDownloadQueue
+{
+    while (self.activeConnections.count < kMaxConcurrentDownloads && self.waitingTaskIDs.count > 0) {
+        NSString *nextTaskId = [self.waitingTaskIDs objectAtIndex:0];
+        [self.waitingTaskIDs removeObjectAtIndex:0];
+        
+        HRDownloadTask *taskToStart = nil;
+        for (HRDownloadTask *t in self.internalTasks) {
+            if ([t.taskId isEqualToString:nextTaskId]) {
+                taskToStart = t;
+                break;
+            }
+        }
+        
+        if (taskToStart) {
+            [self startDownloadingTask:taskToStart];
         }
     }
 }
@@ -214,6 +432,8 @@ static IOReturn (*pfn_IOPMAssertionRelease)(IOPMAssertionID) = NULL;
             t.remoteURLString = urlString;
             t.title = title;
             t.subtitle = subtitle;
+            [self saveMetadataForTask:t];
+            
             if (t.status == HRDownloadStatusPaused || t.status == HRDownloadStatusFailed) {
                 [self resumeTask:t];
             }
@@ -227,16 +447,49 @@ static IOReturn (*pfn_IOPMAssertionRelease)(IOPMAssertionID) = NULL;
     task.subtitle = subtitle;
     task.remoteURLString = urlString;
     
-    NSString *safeName = [NSString stringWithFormat:@"%@.mp4", taskId];
+    // Формируем понятное человеческое имя: "Название - Серия (taskId).mp4"
+    NSMutableString *rawName = [NSMutableString string];
+    if (title && [title length] > 0) {
+        [rawName appendString:title];
+    }
+    if (subtitle && [subtitle length] > 0) {
+        if ([rawName length] > 0) [rawName appendString:@" - "];
+        [rawName appendString:subtitle];
+    }
+    if ([rawName length] == 0) {
+        [rawName appendString:taskId];
+    } else {
+        [rawName appendFormat:@" (%@)", taskId];
+    }
+    
+    // Заменяем все запрещенные символы файловой системы на дефис
+    NSCharacterSet *invalidChars = [NSCharacterSet characterSetWithCharactersInString:@"/:\\?%*|\"<>"];
+    NSArray *components = [rawName componentsSeparatedByCharactersInSet:invalidChars];
+    NSString *sanitizedName = [components componentsJoinedByString:@"-"];
+    
+    // Убираем двойные пробелы/дефисы по краям
+    sanitizedName = [sanitizedName stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    
+    NSString *safeName = [NSString stringWithFormat:@"%@.mp4", sanitizedName];
     task.localFilePath = [[self downloadsDirectory] stringByAppendingPathComponent:safeName];
     
+    [self saveMetadataForTask:task];
     [self.internalTasks addObject:task];
-    [self startDownloadingTask:task];
+    
+    if (self.activeConnections.count < kMaxConcurrentDownloads) {
+        [self startDownloadingTask:task];
+    } else {
+        task.status = HRDownloadStatusWaiting;
+        [self saveMetadataForTask:task];
+        [self.waitingTaskIDs addObject:task.taskId];
+        [[NSNotificationCenter defaultCenter] postNotificationName:kHRDownloadProgressNotification object:task];
+    }
 }
 
 - (void)startDownloadingTask:(HRDownloadTask *)task
 {
     task.status = HRDownloadStatusDownloading;
+    [self saveMetadataForTask:task];
     [self updatePowerAssertionState];
     
     NSFileManager *fm = [NSFileManager defaultManager];
@@ -264,10 +517,13 @@ static IOReturn (*pfn_IOPMAssertionRelease)(IOPMAssertionID) = NULL;
     [conn start];
     
     [self.activeConnections setObject:conn forKey:task.taskId];
+    [[NSNotificationCenter defaultCenter] postNotificationName:kHRDownloadProgressNotification object:task];
 }
 
 - (void)pauseTask:(HRDownloadTask *)task
 {
+    [self.waitingTaskIDs removeObject:task.taskId];
+    
     NSURLConnection *conn = [self.activeConnections objectForKey:task.taskId];
     if (conn) {
         [conn cancel];
@@ -281,22 +537,85 @@ static IOReturn (*pfn_IOPMAssertionRelease)(IOPMAssertionID) = NULL;
     }
     
     task.status = HRDownloadStatusPaused;
+    [self saveMetadataForTask:task];
+    
     [self updatePowerAssertionState];
     [[NSNotificationCenter defaultCenter] postNotificationName:kHRDownloadProgressNotification object:task];
+    
+    [self processDownloadQueue];
 }
 
 - (void)resumeTask:(HRDownloadTask *)task
 {
-    if (task.status == HRDownloadStatusDownloading) return;
-    [self startDownloadingTask:task];
+    if (task.status == HRDownloadStatusDownloading || task.status == HRDownloadStatusWaiting) return;
+    
+    if (task.totalBytes > 0 && task.downloadedBytes >= task.totalBytes) {
+        task.status = HRDownloadStatusFinished;
+        task.progress = 1.0f;
+        [self saveMetadataForTask:task];
+        [[NSNotificationCenter defaultCenter] postNotificationName:kHRDownloadFinishedNotification object:task];
+        return;
+    }
+    
+    if (self.activeConnections.count < kMaxConcurrentDownloads) {
+        [self startDownloadingTask:task];
+    } else {
+        if (![self.waitingTaskIDs containsObject:task.taskId]) {
+            task.status = HRDownloadStatusWaiting;
+            [self saveMetadataForTask:task];
+            [self.waitingTaskIDs addObject:task.taskId];
+            [[NSNotificationCenter defaultCenter] postNotificationName:kHRDownloadProgressNotification object:task];
+        }
+    }
 }
 
 - (void)cancelTask:(HRDownloadTask *)task
 {
     [self pauseTask:task];
+    
     [[NSFileManager defaultManager] removeItemAtPath:task.localFilePath error:nil];
+    [self removeMetadataForTaskId:task.taskId];
     [self.internalTasks removeObject:task];
     [self updatePowerAssertionState];
+}
+
+#pragma mark - Массовое управление
+
+- (void)pauseAllTasks
+{
+    [self.waitingTaskIDs removeAllObjects];
+    
+    NSArray *keys = [self.activeConnections allKeys];
+    for (NSString *tId in keys) {
+        NSURLConnection *conn = [self.activeConnections objectForKey:tId];
+        [conn cancel];
+        
+        NSFileHandle *handle = [self.fileHandles objectForKey:tId];
+        if (handle) {
+            [handle closeFile];
+        }
+    }
+    [self.activeConnections removeAllObjects];
+    [self.fileHandles removeAllObjects];
+    
+    for (HRDownloadTask *task in self.internalTasks) {
+        if (task.status == HRDownloadStatusDownloading || task.status == HRDownloadStatusWaiting) {
+            task.status = HRDownloadStatusPaused;
+            [self saveMetadataForTask:task];
+            [[NSNotificationCenter defaultCenter] postNotificationName:kHRDownloadProgressNotification object:task];
+        }
+    }
+    
+    [self updatePowerAssertionState];
+}
+
+- (void)resumeAllTasks
+{
+    for (HRDownloadTask *task in self.internalTasks) {
+        if (task.status == HRDownloadStatusPaused || task.status == HRDownloadStatusFailed) {
+            [self resumeTask:task];
+        }
+    }
 }
 
 #pragma mark - NSURLConnectionDataDelegate
@@ -320,7 +639,18 @@ static IOReturn (*pfn_IOPMAssertionRelease)(IOPMAssertionID) = NULL;
     
     if ([response isKindOfClass:[NSHTTPURLResponse class]]) {
         NSInteger statusCode = [(NSHTTPURLResponse *)response statusCode];
-        // Если сервер проигнорировал Range и отдал 200 OK с самого начала — перезаписываем файл с 0
+        
+        if (statusCode == 416) {
+            if (task.downloadedBytes > 0 && task.downloadedBytes >= task.totalBytes) {
+                [connection cancel];
+                [self connectionDidFinishLoading:connection];
+            } else {
+                [connection cancel];
+                [self connection:connection didFailWithError:[NSError errorWithDomain:@"HRManager" code:416 userInfo:nil]];
+            }
+            return;
+        }
+        
         if (statusCode == 200 && task.downloadedBytes > 0) {
             NSFileHandle *handle = [self.fileHandles objectForKey:task.taskId];
             [handle truncateFileAtOffset:0];
@@ -330,7 +660,12 @@ static IOReturn (*pfn_IOPMAssertionRelease)(IOPMAssertionID) = NULL;
     
     long long expected = [response expectedContentLength];
     if (expected != NSURLResponseUnknownLength) {
-        task.totalBytes = task.downloadedBytes + expected;
+        if ([(NSHTTPURLResponse *)response statusCode] == 206) {
+            task.totalBytes = task.downloadedBytes + expected;
+        } else {
+            task.totalBytes = expected;
+        }
+        [self saveMetadataForTask:task];
     }
 }
 
@@ -366,9 +701,12 @@ static IOReturn (*pfn_IOPMAssertionRelease)(IOPMAssertionID) = NULL;
     
     task.status = HRDownloadStatusFinished;
     task.progress = 1.0f;
+    [self saveMetadataForTask:task];
     
     [self updatePowerAssertionState];
     [[NSNotificationCenter defaultCenter] postNotificationName:kHRDownloadFinishedNotification object:task];
+    
+    [self processDownloadQueue];
 }
 
 - (void)connection:(NSURLConnection *)connection didFailWithError:(NSError *)error
@@ -378,6 +716,8 @@ static IOReturn (*pfn_IOPMAssertionRelease)(IOPMAssertionID) = NULL;
     
     [self pauseTask:task];
     task.status = HRDownloadStatusFailed;
+    [self saveMetadataForTask:task];
+    
     [[NSNotificationCenter defaultCenter] postNotificationName:kHRDownloadProgressNotification object:task];
 }
 
@@ -385,30 +725,14 @@ static IOReturn (*pfn_IOPMAssertionRelease)(IOPMAssertionID) = NULL;
 
 - (void)copySingleVideoToClipboardTitle:(NSString *)title urlString:(NSString *)urlString
 {
-    if (!urlString || [urlString length] == 0) return;
-    
-    NSMutableString *m3u = [NSMutableString stringWithString:@"#EXTM3U\n"];
-    [m3u appendFormat:@"#EXTINF:-1,%@\n%@\n", title ?: @"Видео", urlString];
-    
-    [UIPasteboard generalPasteboard].string = m3u;
+    [HRM3UExporter copySingleVideoToClipboardTitle:title urlString:urlString];
 }
 
 - (void)copySeasonPlaylistToClipboardTitle:(NSString *)showTitle
                                seasonTitle:(NSString *)seasonTitle
                                   episodes:(NSArray *)episodes
 {
-    if (!episodes || [episodes count] == 0) return;
-    
-    NSMutableString *m3u = [NSMutableString stringWithString:@"#EXTM3U\n"];
-    for (NSDictionary *ep in episodes) {
-        NSString *epName = [ep objectForKey:@"title"] ?: @"Серия";
-        NSString *epUrl = [ep objectForKey:@"url"] ?: @"";
-        if ([epUrl length] > 0) {
-            [m3u appendFormat:@"#EXTINF:-1,%@ - %@ (%@)\n%@\n", showTitle, seasonTitle, epName, epUrl];
-        }
-    }
-    
-    [UIPasteboard generalPasteboard].string = m3u;
+    [HRM3UExporter copySeasonPlaylistToClipboardTitle:showTitle seasonTitle:seasonTitle episodes:episodes];
 }
 
 @end

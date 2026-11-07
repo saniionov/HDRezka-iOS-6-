@@ -40,8 +40,6 @@
     NSString *dbPath = [docsDir stringByAppendingPathComponent:@"hdrezka_storage.sqlite"];
     
     if (sqlite3_open([dbPath UTF8String], &_db) == SQLITE_OK) {
-        NSLog(@"[Stage 7.1] База SQLite успешно открыта: %@", dbPath);
-        
         char *errMsg = NULL;
         
         const char *favTable = "CREATE TABLE IF NOT EXISTS favorites ("
@@ -54,7 +52,13 @@
         "season TEXT, "
         "episode TEXT, "
         "translatorId TEXT);";
-        sqlite3_exec(self.db, favTable, NULL, NULL, &errMsg);
+        if (sqlite3_exec(self.db, favTable, NULL, NULL, &errMsg) != SQLITE_OK) {
+            if (errMsg) {
+                NSLog(@"[HRDatabase] Ошибка создания таблицы favorites: %s", errMsg);
+                sqlite3_free(errMsg);
+                errMsg = NULL;
+            }
+        }
         
         const char *histTable = "CREATE TABLE IF NOT EXISTS history ("
         "movieId TEXT PRIMARY KEY, "
@@ -67,9 +71,15 @@
         "episode TEXT, "
         "translatorId TEXT, "
         "updatedAt INTEGER);";
-        sqlite3_exec(self.db, histTable, NULL, NULL, &errMsg);
+        if (sqlite3_exec(self.db, histTable, NULL, NULL, &errMsg) != SQLITE_OK) {
+            if (errMsg) {
+                NSLog(@"[HRDatabase] Ошибка создания таблицы history: %s", errMsg);
+                sqlite3_free(errMsg);
+                errMsg = NULL;
+            }
+        }
     } else {
-        NSLog(@"[Stage 7.1 Ошибка] Не удалось открыть базу SQLite: %s", sqlite3_errmsg(self.db));
+        NSLog(@"[HRDatabase Ошибка] Не удалось открыть базу SQLite: %s", sqlite3_errmsg(self.db));
     }
 }
 
@@ -83,7 +93,7 @@
         return YES;
     }
     
-    NSLog(@"[Stage 7.1 Ошибка] Не удалось закрыть SQLite: %s", sqlite3_errmsg(self.db));
+    NSLog(@"[HRDatabase Ошибка] Не удалось закрыть SQLite: %s", sqlite3_errmsg(self.db));
     return NO;
 }
 
@@ -97,20 +107,26 @@
     if (!self.db || !movie || !movie.movieId) return NO;
     
     BOOL isSeries = movie.isSeries || ([movie.detailURLString rangeOfString:@"/series/"].location != NSNotFound);
-    NSString *sStr = season ?: @"1";
-    NSString *eStr = episode ?: @"1";
-    NSString *tStr = translatorId ?: @"238";
+    NSString *sStr = isSeries ? (season ?: @"1") : @"0";
+    NSString *eStr = isSeries ? (episode ?: @"1") : @"0";
+    NSString *tStr = translatorId ?: @"0";
     
     NSString *posterToSave = movie.posterURLString ?: @"";
     if ([posterToSave length] == 0) {
-        // Пробуем восстановить постер из истории, если он там был сохранен ранее
-        for (HRMovie *m in [self allHistory]) {
-            if ([m.movieId isEqualToString:movie.movieId] && [m.posterURLString length] > 0) {
-                posterToSave = m.posterURLString;
-                movie.posterURLString = posterToSave;
-                break;
+        // Точечный быстрый запрос постера из истории без загрузки всех записей
+        const char *pQuery = "SELECT posterURLString FROM history WHERE movieId = ? AND LENGTH(posterURLString) > 0 LIMIT 1;";
+        sqlite3_stmt *pStmt;
+        if (sqlite3_prepare_v2(self.db, pQuery, -1, &pStmt, NULL) == SQLITE_OK) {
+            sqlite3_bind_text(pStmt, 1, [movie.movieId UTF8String], -1, SQLITE_TRANSIENT);
+            if (sqlite3_step(pStmt) == SQLITE_ROW) {
+                const char *pText = (const char *)sqlite3_column_text(pStmt, 0);
+                if (pText) {
+                    posterToSave = [NSString stringWithUTF8String:pText];
+                    movie.posterURLString = posterToSave;
+                }
             }
         }
+        sqlite3_finalize(pStmt);
     }
     
     NSString *cleanInfo = movie.info ?: @"";
@@ -135,7 +151,6 @@
         
         if (sqlite3_step(stmt) == SQLITE_DONE) {
             success = YES;
-            NSLog(@"[Stage 7.2] Фильм ID %@ сохранен в Избранное (S:%@ E:%@, T:%@)", movie.movieId, sStr, eStr, tStr);
         }
     }
     sqlite3_finalize(stmt);
@@ -154,7 +169,6 @@
         sqlite3_bind_text(stmt, 1, [movieId UTF8String], -1, SQLITE_TRANSIENT);
         if (sqlite3_step(stmt) == SQLITE_DONE) {
             success = YES;
-            NSLog(@"[Stage 7.2] Фильм ID %@ удален из избранного.", movieId);
         }
     }
     sqlite3_finalize(stmt);
@@ -207,9 +221,9 @@
             if (inf) movie.info = [NSString stringWithUTF8String:inf];
             movie.isSeries = (isSer == 1);
             
-            NSString *sVal = s ? [NSString stringWithUTF8String:s] : @"1";
-            NSString *eVal = e ? [NSString stringWithUTF8String:e] : @"1";
-            NSString *trVal = tr ? [NSString stringWithUTF8String:tr] : @"";
+            NSString *sVal = s ? [NSString stringWithUTF8String:s] : (movie.isSeries ? @"1" : @"0");
+            NSString *eVal = e ? [NSString stringWithUTF8String:e] : (movie.isSeries ? @"1" : @"0");
+            NSString *trVal = tr ? [NSString stringWithUTF8String:tr] : @"0";
             movie.rating = [NSString stringWithFormat:@"%@|%@|%@", sVal, eVal, trVal];
             
             [results addObject:movie];
@@ -229,20 +243,26 @@
     if (!self.db || !movie || !movie.movieId) return;
     
     BOOL isSeries = movie.isSeries || ([movie.detailURLString rangeOfString:@"/series/"].location != NSNotFound);
-    NSString *sStr = season ?: @"1";
-    NSString *eStr = episode ?: @"1";
-    NSString *tStr = translatorId ?: @"238";
+    NSString *sStr = isSeries ? (season ?: @"1") : @"0";
+    NSString *eStr = isSeries ? (episode ?: @"1") : @"0";
+    NSString *tStr = translatorId ?: @"0";
     
     NSString *posterToSave = movie.posterURLString ?: @"";
     if ([posterToSave length] == 0) {
-        // Подстраховка: проверяем постер в таблице избранного
-        for (HRMovie *m in [self allFavorites]) {
-            if ([m.movieId isEqualToString:movie.movieId] && [m.posterURLString length] > 0) {
-                posterToSave = m.posterURLString;
-                movie.posterURLString = posterToSave;
-                break;
+        // Точечный быстрый запрос постера из избранного без полной вычитки таблицы
+        const char *pQuery = "SELECT posterURLString FROM favorites WHERE movieId = ? AND LENGTH(posterURLString) > 0 LIMIT 1;";
+        sqlite3_stmt *pStmt;
+        if (sqlite3_prepare_v2(self.db, pQuery, -1, &pStmt, NULL) == SQLITE_OK) {
+            sqlite3_bind_text(pStmt, 1, [movie.movieId UTF8String], -1, SQLITE_TRANSIENT);
+            if (sqlite3_step(pStmt) == SQLITE_ROW) {
+                const char *pText = (const char *)sqlite3_column_text(pStmt, 0);
+                if (pText) {
+                    posterToSave = [NSString stringWithUTF8String:pText];
+                    movie.posterURLString = posterToSave;
+                }
             }
         }
+        sqlite3_finalize(pStmt);
     }
     
     NSString *cleanInfo = movie.info ?: @"";
@@ -268,15 +288,15 @@
         sqlite3_bind_text(stmt, 9, [tStr UTF8String], -1, SQLITE_TRANSIENT);
         sqlite3_bind_int64(stmt, 10, now);
         
-        if (sqlite3_step(stmt) == SQLITE_DONE) {
-            NSLog(@"[Stage 7.3] История просмотра обновлена: '%@' (S:%@ E:%@, T:%@)", movie.title, sStr, eStr, tStr);
-        }
+        sqlite3_step(stmt);
     }
     sqlite3_finalize(stmt);
     
     // 2. Синхронизация позиции в Избранном (если фильм там сохранен)
     if ([self isFavorite:movie.movieId]) {
-        const char *favUpdate = "UPDATE favorites SET season = ?, episode = ?, translatorId = ?, info = ?, posterURLString = CASE WHEN LENGTH(?) > 0 THEN ? ELSE posterURLString END WHERE movieId = ?;";
+        const char *favUpdate = "UPDATE favorites SET season = ?, episode = ?, translatorId = ?, info = ?, "
+        "posterURLString = CASE WHEN LENGTH(?) > 0 THEN ? ELSE posterURLString END "
+        "WHERE movieId = ?;";
         sqlite3_stmt *favStmt;
         if (sqlite3_prepare_v2(self.db, favUpdate, -1, &favStmt, NULL) == SQLITE_OK) {
             sqlite3_bind_text(favStmt, 1, [sStr UTF8String], -1, SQLITE_TRANSIENT);
@@ -287,7 +307,6 @@
             sqlite3_bind_text(favStmt, 6, [posterToSave UTF8String], -1, SQLITE_TRANSIENT);
             sqlite3_bind_text(favStmt, 7, [movie.movieId UTF8String], -1, SQLITE_TRANSIENT);
             sqlite3_step(favStmt);
-            NSLog(@"[Stage 7.2] Позиция в Избранном синхронизирована: (S:%@ E:%@)", sStr, eStr);
         }
         sqlite3_finalize(favStmt);
     }
@@ -321,9 +340,9 @@
             if (inf) movie.info = [NSString stringWithUTF8String:inf];
             movie.isSeries = (isSer == 1);
             
-            NSString *sVal = s ? [NSString stringWithUTF8String:s] : @"1";
-            NSString *eVal = e ? [NSString stringWithUTF8String:e] : @"1";
-            NSString *trVal = tr ? [NSString stringWithUTF8String:tr] : @"";
+            NSString *sVal = s ? [NSString stringWithUTF8String:s] : (movie.isSeries ? @"1" : @"0");
+            NSString *eVal = e ? [NSString stringWithUTF8String:e] : (movie.isSeries ? @"1" : @"0");
+            NSString *trVal = tr ? [NSString stringWithUTF8String:tr] : @"0";
             movie.rating = [NSString stringWithFormat:@"%@|%@|%@", sVal, eVal, trVal];
             
             [results addObject:movie];
@@ -331,6 +350,22 @@
     }
     sqlite3_finalize(stmt);
     return results;
+}
+
+- (BOOL)clearHistory
+{
+    if (!self.db) return NO;
+    
+    char *errMsg = NULL;
+    int rc = sqlite3_exec(self.db, "DELETE FROM history;", NULL, NULL, &errMsg);
+    if (rc != SQLITE_OK) {
+        if (errMsg) {
+            NSLog(@"[HRDatabase] Ошибка очистки истории: %s", errMsg);
+            sqlite3_free(errMsg);
+        }
+        return NO;
+    }
+    return YES;
 }
 
 @end

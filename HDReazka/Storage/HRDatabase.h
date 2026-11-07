@@ -24,6 +24,7 @@
                        translatorId:(NSString *)translatorId;
 
 - (NSArray *)allHistory;
+- (BOOL)clearHistory;
 
 - (void)setupDatabase;
 - (BOOL)closeDatabase;

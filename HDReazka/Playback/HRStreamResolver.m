@@ -286,7 +286,7 @@
         NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:&jsonErr];
         
         if (jsonErr || !json || ![json isKindOfClass:[NSDictionary class]]) {
-            if (completion) completion(nil, nil, nil, [NSError errorWithDomain:@"HRStreamResolver" code:-2 userInfo:@{NSLocalizedDescriptionKey: @"Некорректный ответ сервера (возможно сработала защита)."}]);
+            if (completion) completion(nil, nil, nil, [NSError errorWithDomain:@"HRStreamResolver" code:-2 userInfo:@{NSLocalizedDescriptionKey: @"Некорректный ответ сервера."}]);
             return;
         }
         
@@ -333,15 +333,14 @@
     NSOperationQueue *queue = [[NSOperationQueue alloc] init];
     queue.maxConcurrentOperationCount = 2;
     
-    __block NSInteger completedCount = 0;
+    __block NSInteger totalCount = [episodesList count];
+    __block NSInteger processedCount = 0;
     
     for (NSDictionary *epData in episodesList) {
         NSInteger epId = [[epData objectForKey:@"id"] integerValue];
         NSString *epName = [epData objectForKey:@"name"];
         
         [queue addOperationWithBlock:^{
-            dispatch_semaphore_t sema = dispatch_semaphore_create(0);
-            
             NSDictionary *params = @{
                                      @"id": movieId,
                                      @"translator_id": @(translatorId),
@@ -375,8 +374,8 @@
                 }
                 
                 @synchronized (results) {
-                    completedCount++;
-                    if (completedCount == [episodesList count]) {
+                    processedCount++;
+                    if (processedCount == totalCount) {
                         dispatch_async(dispatch_get_main_queue(), ^{
                             NSArray *sorted = [results sortedArrayUsingComparator:^NSComparisonResult(id obj1, id obj2) {
                                 NSInteger e1 = [[obj1 objectForKey:@"episode"] integerValue];
@@ -385,136 +384,183 @@
                                 if (e1 > e2) return NSOrderedDescending;
                                 return NSOrderedSame;
                             }];
-                            if (completion) completion(sorted);  
-                        });  
-                    }  
-                }  
-                dispatch_semaphore_signal(sema);  
-            }];  
-            
-            dispatch_semaphore_wait(sema, dispatch_time(DISPATCH_TIME_NOW, 15 * NSEC_PER_SEC));  
-        }];  
-    }  
-}  
+                            if (completion) completion(sorted);
+                        });
+                    }
+                }
+            }];
+        }];
+    }
+}
 
-#pragma mark - Вспомогательные парсеры URL  
+#pragma mark - 5. Предварительное разрешение редиректа балансировщика CDN
 
-+ (NSDictionary *)parseStreamsFromRawURLString:(NSString *)rawString  
-{  
-    NSMutableDictionary *result = [NSMutableDictionary dictionary];  
-    if (!rawString || [rawString length] == 0) return result;  
++ (void)resolveDirectMediaURL:(NSString *)rawURL completion:(void (^)(NSString *resolvedURL))completion
+{
+    if (!rawURL || [rawURL length] == 0) {
+        if (completion) completion(rawURL);
+        return;
+    }
     
-    NSString *trashPattern = @"\\/\\/([a-zA-Z0-9]{2,10})\\.([a-zA-Z0-9]{2,10})\\.([a-zA-Z0-9]{2,10})\\.([a-zA-Z0-9]{2,10})\\/";  
-    NSString *cleanString = [self removeTrashStrings:rawString usingPattern:trashPattern];  
+    // Если ссылка уже указывает на конечную ноду (например, orange.stream... или lilac.stream...)
+    if ([rawURL rangeOfString:@"stream.voidboost.one"].location == NSNotFound ||
+        [rawURL rangeOfString:@"//stream.voidboost.one"].location == NSNotFound) {
+        if (completion) completion(rawURL);
+        return;
+    }
     
-    NSArray *parts = [cleanString componentsSeparatedByString:@","];  
-    for (NSString *part in parts) {  
-        NSArray *kv = [part componentsSeparatedByString:@"]"];  
-        if ([kv count] == 2) {  
-            NSString *qRaw = [kv objectAtIndex:0];  
-            NSString *uRaw = [kv objectAtIndex:1];  
-            
-            NSString *quality = [qRaw stringByReplacingOccurrencesOfString:@"[" withString:@""];  
-            quality = [quality stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];  
-            
-            NSArray *allowedQualities = @[@"360p", @"480p", @"720p", @"1080p"];  
-            if (![allowedQualities containsObject:quality]) {  
-                continue;  
-            }  
-            
-            NSArray *urls = [uRaw componentsSeparatedByString:@" or "];  
-            NSString *finalURL = nil;  
-            if ([urls count] > 0) {  
-                finalURL = [urls objectAtIndex:0];  
-            }  
-            finalURL = [finalURL stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];  
-            
-            // ВАЖНО: iOS 6 MPMoviePlayerController не может играть видео по современному HTTPS.  
-            // Мы принудительно переключаем поток на HTTP!  
-            if ([finalURL hasPrefix:@"//"]) {  
-                finalURL = [@"http:" stringByAppendingString:finalURL];  
-            } else if ([finalURL hasPrefix:@"https://"]) {  
-                finalURL = [finalURL stringByReplacingOccurrencesOfString:@"https://" withString:@"http://"];  
-            }  
-            
-            if (quality && finalURL) {  
-                [result setObject:finalURL forKey:quality];  
-            }  
-        }  
-    }  
+    NSURL *targetURL = [NSURL URLWithString:rawURL];
+    if (!targetURL) {
+        if (completion) completion(rawURL);
+        return;
+    }
     
-    return result;  
-}  
+    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:targetURL
+                                                       cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
+                                                   timeoutInterval:5.0];
+    [req setHTTPMethod:@"HEAD"];
+    [req setValue:@"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0" forHTTPHeaderField:@"User-Agent"];
+    [req setValue:@"https://rezka.ag/" forHTTPHeaderField:@"Referer"];
+    
+    [NSURLConnection sendAsynchronousRequest:req
+                                       queue:[NSOperationQueue mainQueue]
+                           completionHandler:^(NSURLResponse *response, NSData *data, NSError *error) {
+                               NSHTTPURLResponse *httpResponse = (NSHTTPURLResponse *)response;
+                               NSString *finalURL = [httpResponse.URL absoluteString];
+                               
+                               // 1. Проверяем авто-редирект NSURLConnection
+                               if (finalURL && [finalURL rangeOfString:@"stream.voidboost.one"].location != NSNotFound &&
+                                   [finalURL rangeOfString:@"//stream.voidboost.one"].location == NSNotFound) {
+                                   NSLog(@"[HRStreamResolver] Балансировщик перенаправил на ноду: %@", finalURL);
+                                   if (completion) completion(finalURL);
+                                   return;
+                               }
+                               
+                               // 2. Проверяем заголовок Location вручную
+                               NSDictionary *headers = [httpResponse allHeaderFields];
+                               NSString *location = [headers objectForKey:@"Location"] ?: [headers objectForKey:@"location"];
+                               if (location && [location length] > 0) {
+                                   NSLog(@"[HRStreamResolver] Извлечен заголовок Location: %@", location);
+                                   if (completion) completion(location);
+                                   return;
+                               }
+                               
+                               if (completion) completion(rawURL);
+                           }];
+}
 
-+ (NSString *)removeTrashStrings:(NSString *)input usingPattern:(NSString *)pattern  
-{  
-    if (!input || [input length] == 0) return input;  
-    if ([input rangeOfString:@"#h"].location == NSNotFound) return input;  
+#pragma mark - Вспомогательные парсеры URL
+
++ (NSDictionary *)parseStreamsFromRawURLString:(NSString *)rawString
+{
+    NSMutableDictionary *result = [NSMutableDictionary dictionary];
+    if (!rawString || [rawString length] == 0) return result;
     
-    NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:pattern options:0 error:nil];  
-    NSMutableString *mutableInput = [input mutableCopy];  
+    NSString *trashPattern = @"\\/\\/([a-zA-Z0-9]{2,10})\\.([a-zA-Z0-9]{2,10})\\.([a-zA-Z0-9]{2,10})\\.([a-zA-Z0-9]{2,10})\\/";
+    NSString *cleanString = [self removeTrashStrings:rawString usingPattern:trashPattern];
     
-    while (YES) {  
-        NSRange searchRange = NSMakeRange(0, mutableInput.length);  
-        NSTextCheckingResult *match = [regex firstMatchInString:mutableInput options:0 range:searchRange];  
-        if (!match) break;  
+    NSArray *parts = [cleanString componentsSeparatedByString:@","];
+    for (NSString *part in parts) {
+        NSArray *kv = [part componentsSeparatedByString:@"]"];
+        if ([kv count] == 2) {
+            NSString *qRaw = [kv objectAtIndex:0];
+            NSString *uRaw = [kv objectAtIndex:1];
+            
+            NSString *quality = [qRaw stringByReplacingOccurrencesOfString:@"[" withString:@""];
+            quality = [quality stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            
+            NSArray *allowedQualities = @[@"360p", @"480p", @"720p", @"1080p"];
+            if (![allowedQualities containsObject:quality]) {
+                continue;
+            }
+            
+            NSArray *urls = [uRaw componentsSeparatedByString:@" or "];
+            NSString *finalURL = nil;
+            if ([urls count] > 0) {
+                finalURL = [urls objectAtIndex:0];
+            }
+            finalURL = [finalURL stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            
+            if (quality && finalURL) {
+                [result setObject:finalURL forKey:quality];
+            }
+        }
+    }
+    
+    return result;
+}
+
++ (NSString *)removeTrashStrings:(NSString *)input usingPattern:(NSString *)pattern
+{
+    if (!input || [input length] == 0) return input;
+    if ([input rangeOfString:@"#h"].location == NSNotFound) return input;
+    
+    NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:pattern options:0 error:nil];
+    NSMutableString *mutableInput = [input mutableCopy];
+    
+    NSInteger safetyCounter = 0;
+    while (safetyCounter < 50) {
+        safetyCounter++;
+        NSRange searchRange = NSMakeRange(0, mutableInput.length);
+        NSTextCheckingResult *match = [regex firstMatchInString:mutableInput options:0 range:searchRange];
+        if (!match) break;
         
-        NSString *trashPart = [mutableInput substringWithRange:match.range];  
-        NSString *replacement = [self decodeTrashString:trashPart];  
-        [mutableInput replaceCharactersInRange:match.range withString:replacement];  
-    }  
+        NSString *trashPart = [mutableInput substringWithRange:match.range];
+        NSString *replacement = [self decodeTrashString:trashPart];
+        [mutableInput replaceCharactersInRange:match.range withString:replacement];
+    }
     
-    NSString *clean = [mutableInput stringByReplacingOccurrencesOfString:@"//_//" withString:@"//"];  
-    return clean;  
-}  
+    NSString *clean = [mutableInput stringByReplacingOccurrencesOfString:@"//_//" withString:@"//"];
+    return clean;
+}
 
-+ (NSString *)decodeTrashString:(NSString *)trash  
-{  
-    NSString *clean = [trash stringByReplacingOccurrencesOfString:@"/" withString:@""];  
-    clean = [clean stringByReplacingOccurrencesOfString:@"." withString:@""];  
++ (NSString *)decodeTrashString:(NSString *)trash
+{
+    NSString *clean = [trash stringByReplacingOccurrencesOfString:@"/" withString:@""];
+    clean = [clean stringByReplacingOccurrencesOfString:@"." withString:@""];
     
-    if ([clean length] == 0) return @"";  
+    if ([clean length] == 0) return @"";
     
-    NSString *plistStr = [NSString stringWithFormat:@"<?xml version=\"1.0\" encoding=\"UTF-8\"?><!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\"><plist version=\"1.0\"><data>%@</data></plist>", clean];  
-    NSData *plistData = [plistStr dataUsingEncoding:NSUTF8StringEncoding];  
+    NSString *plistStr = [NSString stringWithFormat:@"<?xml version=\"1.0\" encoding=\"UTF-8\"?><!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\"><plist version=\"1.0\"><data>%@</data></plist>", clean];
+    NSData *plistData = [plistStr dataUsingEncoding:NSUTF8StringEncoding];
     
-    NSData *data = [NSPropertyListSerialization propertyListFromData:plistData  
-                                                    mutabilityOption:NSPropertyListImmutable  
-                                                              format:NULL  
-                                                    errorDescription:NULL];  
-    if (!data) return @"";  
+    NSData *data = [NSPropertyListSerialization propertyListFromData:plistData
+                                                    mutabilityOption:NSPropertyListImmutable
+                                                              format:NULL
+                                                    errorDescription:NULL];
+    if (!data) return @"";
     
-    NSString *decoded = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];  
-    return decoded ?: @"";  
-}  
+    NSString *decoded = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    return decoded ?: @"";
+}
 
-+ (NSString *)bestQualityKeyFromStreams:(NSDictionary *)streams preferredQuality:(NSString *)preferred  
-{  
-    if (!streams || [streams count] == 0) return nil;  
-    if (preferred && [streams objectForKey:preferred]) {  
-        return preferred;  
-    }  
++ (NSString *)bestQualityKeyFromStreams:(NSDictionary *)streams preferredQuality:(NSString *)preferred
+{
+    if (!streams || [streams count] == 0) return nil;
+    if (preferred && [streams objectForKey:preferred]) {
+        return preferred;
+    }
     
-    NSArray *order = @[@"1080p", @"720p", @"480p", @"360p"];  
+    NSArray *order = @[@"1080p", @"720p", @"480p", @"360p"];
     
-    if (preferred) {  
-        NSUInteger pIdx = [order indexOfObject:preferred];  
-        if (pIdx != NSNotFound) {  
-            for (NSUInteger i = pIdx; i < [order count]; i++) {  
-                NSString *q = [order objectAtIndex:i];  
-                if ([streams objectForKey:q]) return q;  
-            }  
-        }  
-    }  
+    if (preferred) {
+        NSUInteger pIdx = [order indexOfObject:preferred];
+        if (pIdx != NSNotFound) {
+            for (NSUInteger i = pIdx; i < [order count]; i++) {
+                NSString *q = [order objectAtIndex:i];
+                if ([streams objectForKey:q]) return q;
+            }
+        }
+    }
     
-    for (NSString *q in order) {  
-        if ([streams objectForKey:q]) return q;  
-    }  
+    for (NSString *q in order) {
+        if ([streams objectForKey:q]) return q;
+    }
     
-    for (NSString *key in [streams allKeys]) {  
-        return key;  
-    }  
-    return nil;  
-}  
+    for (NSString *key in [streams allKeys]) {
+        return key;
+    }
+    return nil;
+}
 
-@end  
+@end
